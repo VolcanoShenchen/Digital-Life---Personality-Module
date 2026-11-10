@@ -1,0 +1,2 @@
+# Runtime uses Python >=3.12 standard library and APIs supplied by AstrBot.
+# No additional third-party runtime dependencies.

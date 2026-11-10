@@ -6,6 +6,7 @@ venv/
 *.egg-info/
 
 # Development and build output
+.tools/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
