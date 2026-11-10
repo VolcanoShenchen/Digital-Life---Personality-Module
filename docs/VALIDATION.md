@@ -5,7 +5,8 @@
 - 插件版本：0.1.0，内部测试预览。
 - 实现分支：feature/personality-v0.1。
 - 官方参考：AstrBot v4.29.4，固定提交 `61335414433db721b3f7ecc93f90deafe0a59d78`。
-- 本地解释器：Python 3.12.14。
+- 单元测试解释器：Python 3.12.14；E 盘宿主测试使用独立 Python 3.12.10。
+- 本地宿主：官方 PyPI AstrBot 4.29.4，NapCat 4.18.42 便携 Node 包，Windows AMD64。
 - 静态工具：Ruff 0.14.10。
 
 ## 官方源码核对
@@ -33,10 +34,24 @@
 
 本地可复现命令见项目 README。API 替身仅模拟公开接口形状，未执行完整 AstrBot 加载器、调度器或 QQ 适配器。
 
+## E 盘本地宿主验证
+
+使用独立目录 E:\LinXiaozhi\Memory\local-test，未改动云端环境。
+
+- 官方 Python 3.12.10 嵌入式运行时与 AstrBot 4.29.4 wheel 安装到 E 盘，pip check 通过。
+- AstrBot 从 E 盘工作目录启动，启动日志确认人格插件 0.1.0 成功加载，宿主生成插件配置文件。
+- 管理页面 http://127.0.0.1:6185/ 返回 HTTP 200；管理服务和 OneBot 6199 都仅监听 127.0.0.1。
+- 使用已安装的真实 AstrMessageEvent/ProviderRequest 类完成无网络烟测：人格和关系注入、重复请求、历史与附件引用保留、同 UMO 不同机器人拒绝、管理员事件停止及默认 LLM 禁用。
+- 烟测的发送方法由无网络子类截获，未执行完整消息调度器、真实 QQ 传输或模型调用；不能据此声称私聊端到端通过。
+- NapCat 4.18.42 官方便携包通过完整长度和官方 SHA-256，Node 22.11.0 预检通过；未登录 WebUI http://127.0.0.1:6099/webui/ 返回 HTTP 200。
+- NapCat 测试 QQ 数据、配置、日志及进程级 AppData 均指向 E 盘；尚未扫码或启用反向 WS 客户端。
+
+本地环境不放入 Git。实际记录位于该环境的 logs/astrbot-startup.log、logs/actual-api-smoke.json、logs/requirements-installed.txt 及 napcat/prepared-status.json，不包含在发布包中。
+
 ## 尚未验证
 
 - 用户云端的 AstrBot、Python、Agent 和模型组合。
-- 在完整 AstrBot 中安装、识别配置、重载和管理员权限配置。
+- 配置保存后的真实热重载、实际管理员账号的消息权限流程。
 - QQ 实际消息收发、默认 LLM 禁用、发送失败与工具循环。
 - 真实模型、图片、音频与流式端到端行为。
 - 实际角色的语气、人格一致性与多轮对话效果。
