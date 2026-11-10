@@ -8,7 +8,7 @@
 
 - 项目名称已确定为 `General_purpose_personality_plugin`。
 - 使用全新设计，不依赖其他陪伴插件的实现、功能或数据结构。
-- 本地 Git 默认分支为 `main`；远端仓库暂不配置。
+- 本地 Git 默认分支为 `main`；已配置 `origin`，指向 [GitHub 仓库](https://github.com/VolcanoShenchen/Digital-Life---Personality-Module)。远端分支与访问权限尚待联网验证，尚未推送。
 - 业务代码在相应方案确认后编写。
 
 ## 目标
