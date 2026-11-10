@@ -21,6 +21,9 @@
 ## 规划文档
 
 - [项目计划](docs/PLAN.md)
+- [首版详细设计（待确认）](docs/DESIGN_V0_1.md)
+- [AstrBot 对接架构](docs/ARCHITECTURE.md)
+- [验收方案](docs/ACCEPTANCE.md)
 - [开发约定](CONTRIBUTING.md)
 
 首版功能范围和宿主兼容范围仍需在设计与验证阶段明确。状态、长期记忆、主动联系等模块分别评估后再纳入开发。
@@ -34,6 +37,9 @@ README.md
 CONTRIBUTING.md
 docs/
   PLAN.md
+  DESIGN_V0_1.md
+  ARCHITECTURE.md
+  ACCEPTANCE.md
 ```
 
 ## 许可证
