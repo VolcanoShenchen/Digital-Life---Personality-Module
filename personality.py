@@ -83,6 +83,52 @@ _ACTIONS = {
     "occasional": "场景确有需要时偶尔加入简短动作，不每条都微笑、歪头或靠近。",
     "scene": "允许符合当前角色场景的动作和旁白，不替用户决定动作、心理或答复。",
 }
+_AGE_MODES = {
+    "fixed": "年龄固定，不随现实时间变化",
+    "growing": "年龄随现实时间增长",
+    "timeline": "按角色自身时间线计算年龄",
+}
+_CHANGEABILITY = {
+    "stable": "性格稳定，不因单次对话轻易改变",
+    "influenced": "会受到交流影响，但核心倾向不变",
+    "adaptive": "会随关系和经历逐步变化",
+}
+_SOCIAL_TEMPERATURE = {
+    "slow": "慢热，需要时间熟悉",
+    "moderate": "社交节奏适中",
+    "outgoing": "偏外向，容易主动搭话",
+}
+_SENTENCE_LENGTH = {
+    "adaptive": "句子长度随内容变化",
+    "short": "偏好短句，不写长段落",
+    "medium": "中等长度，一句话说清一个意思",
+    "long": "允许较长的完整表达",
+}
+_QUESTION_FREQUENCY = {
+    "never": "很少主动提问",
+    "necessary": "只在确实需要信息时提问",
+    "often": "会比较多地追问细节",
+}
+_ADVICE_POLICY = {
+    "when_requested": "只在你明确请求建议时给建议",
+    "relevant": "话题相关时可以主动提建议",
+    "default": "会主动提供建议",
+}
+_REFUSAL_LEVEL = {
+    "gentle": "拒绝时语气温和",
+    "clear": "拒绝时表达明确",
+    "firm": "拒绝时态度坚定，不留模糊余地",
+}
+_ACTION_FORMAT = {
+    "parentheses": "动作用括号单独标出",
+    "short_narration": "动作用一句短旁白带过",
+    "natural": "动作自然融进句子里",
+}
+_ENVIRONMENT_DETAIL = {
+    "none": "不描写环境",
+    "light": "少量环境细节",
+    "rich": "较多环境细节",
+}
 _EMOJI = {
     "none": "通常不使用 emoji 或颜文字；明确要求时按本轮需要处理。",
     "occasional": "少量使用符合角色的语气词、表情，避免每句都加或固定使用同一组。",
@@ -122,7 +168,7 @@ def build_persona(settings: Settings) -> str:
             ("性别认同", profile.gender_identity),
             ("代称", profile.pronouns),
             ("年龄", profile.age),
-            ("年龄规则", profile.age_mode),
+            ("年龄规则", _AGE_MODES.get(profile.age_mode, "")),
             ("物种", profile.species),
             ("国籍或地区", profile.nationality),
             ("母语", profile.native_language),
@@ -157,8 +203,10 @@ def build_persona(settings: Settings) -> str:
         _list_section(parts, "性格矛盾", personality.contradictions)
         _text_section(parts, "自我评价", personality.self_image)
         _text_section(parts, "对他人的通常看法", personality.view_of_others)
-        _text_section(parts, "性格稳定程度", personality.changeability)
-        _text_section(parts, "社交温度", personality.social_temperature)
+        _text_section(parts, "性格稳定程度", _CHANGEABILITY.get(personality.changeability, ""))
+        _text_section(
+            parts, "社交温度", _SOCIAL_TEMPERATURE.get(personality.social_temperature, "")
+        )
         _text_section(parts, "性格补充", personality.legacy_summary)
         behavior_rules = []
         for title, value in (
@@ -183,7 +231,7 @@ def build_persona(settings: Settings) -> str:
         _text_section(parts, "情境行为规则", "\n".join(behavior_rules))
         _list_section(parts, "不适合主动讨论的话题", boundaries.uncomfortable_topics)
         _list_section(parts, "不会声称完成的行为", boundaries.forbidden_actions)
-        _text_section(parts, "拒绝方式", boundaries.refusal_level)
+        _text_section(parts, "拒绝方式", _REFUSAL_LEVEL.get(boundaries.refusal_level, ""))
         _text_section(parts, "隐私边界", boundaries.privacy_rules)
         _text_section(parts, "现实行为边界", boundaries.reality_claims)
         _text_section(parts, "记忆边界", boundaries.memory_claims)
@@ -206,7 +254,7 @@ def build_persona(settings: Settings) -> str:
             _ACTIONS[roleplay.action_style],
             _EMOJI[speech.emoji_frequency],
             f"是否先直接回答：{'是' if response.answer_first else '否'}。",
-            f"追问频率：{response.ask_followup}；主动建议：{response.offer_advice}。",
+            f"追问频率：{_QUESTION_FREQUENCY.get(response.ask_followup, '')}；主动建议：{_ADVICE_POLICY.get(response.offer_advice, '')}。",
             "先回应具体内容，再决定是否追问。不必每次叫昵称、提问或声明陪伴。"
             "对方只想吐槽时不要自动变成建议清单；认真求助时应把事情说清楚。",
             "保持角色自己的判断和分歧，具体表达，不为了迎合而随意改口。",
@@ -218,7 +266,7 @@ def build_persona(settings: Settings) -> str:
     _text_section(parts, "对用户的称呼", speech.second_person)
     _text_section(parts, "常用词汇与句式", speech.vocabulary)
     _list_section(parts, "避免使用的词", speech.avoided_words)
-    _text_section(parts, "句子长度", speech.sentence_length)
+    _text_section(parts, "句子长度", _SENTENCE_LENGTH.get(speech.sentence_length, ""))
     _text_section(parts, "标点习惯", speech.punctuation)
     _text_section(parts, "幽默方式", speech.humor_style)
     _text_section(parts, "表达在意的方式", speech.affection_style)
