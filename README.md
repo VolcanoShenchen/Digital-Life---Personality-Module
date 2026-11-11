@@ -68,6 +68,7 @@ python scripts/build_plugin.py --verify dist/astrbot_plugin_digital_life_persona
 - [AstrBot 对接架构](docs/ARCHITECTURE.md)
 - [验收方案](docs/ACCEPTANCE.md)
 - [安装说明](docs/INSTALL.md)
+- [配置 WebUI](docs/WEBUI.md)
 - [验证记录](docs/VALIDATION.md)
 - [变更记录](CHANGELOG.md)
 - [开发约定](CONTRIBUTING.md)

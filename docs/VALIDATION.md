@@ -44,6 +44,8 @@
 - 使用已安装的真实 AstrMessageEvent/ProviderRequest 类完成无网络烟测：人格和关系注入、重复请求、历史与附件引用保留、同 UMO 不同机器人拒绝、管理员事件停止及默认 LLM 禁用。
 - 烟测的发送方法由无网络子类截获，未执行完整消息调度器、真实 QQ 传输或模型调用；不能据此声称私聊端到端通过。
 - NapCat 4.18.42 官方便携包通过完整长度和官方 SHA-256，Node 22.11.0 预检通过；未登录 WebUI http://127.0.0.1:6099/webui/ 返回 HTTP 200。
+- 通过本地 Dashboard API 登录检查，AstrBot 已发现 `settings` 插件视图；视图入口使用宿主登录态，不另起服务。
+- WebUI 配置接口通过 51 项本地测试，覆盖读取、保存、无效配置拒绝和未认证拒绝。
 - NapCat 测试 QQ 数据、配置、日志及进程级 AppData 均指向 E 盘；尚未扫码或启用反向 WS 客户端。
 
 本地环境不放入 Git。实际记录位于该环境的 logs/astrbot-startup.log、logs/actual-api-smoke.json、logs/requirements-installed.txt 及 napcat/prepared-status.json，不包含在发布包中。

@@ -1,9 +1,13 @@
 """AstrBot entry point; ordinary chat stays in the host pipeline."""
 
+from copy import deepcopy
+from typing import Any
+
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star
+from astrbot.api.web import error_response, json_response, request
 
 from .personality import Scope
 from .runtime import Runtime
@@ -23,10 +27,77 @@ def event_scope(event: AstrMessageEvent) -> Scope:
 class DigitalLifePersonality(Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context, config)
-        self.runtime = Runtime(config if config is not None else {})
+        self.config = config if config is not None else {}
+        self.runtime = Runtime(self.config)
         self._last_error = ""
         if self.runtime.config_error:
             logger.warning(f"[DigitalLifePersonality] {self.runtime.config_error}")
+        register_web_api = getattr(context, "register_web_api", None)
+        if callable(register_web_api):
+            register_web_api(
+                "/astrbot_plugin_digital_life_personality/settings",
+                self.web_get_settings,
+                ["GET"],
+                "Read personality settings for the dashboard view",
+            )
+            register_web_api(
+                "/astrbot_plugin_digital_life_personality/settings",
+                self.web_save_settings,
+                ["POST"],
+                "Save personality settings from the dashboard view",
+            )
+
+    @staticmethod
+    def _web_config(config: Any) -> dict[str, Any]:
+        """Return a detached JSON-safe copy of the editable configuration."""
+        if not isinstance(config, dict):
+            return {}
+        return deepcopy(dict(config))
+
+    def _web_summary(self) -> dict[str, Any]:
+        return {
+            "version": "0.1.0",
+            "valid": self.runtime.settings is not None,
+            "enabled": bool(self.runtime.settings and self.runtime.settings.enabled),
+            "config_error": self.runtime.config_error,
+            "runtime_applies_on_reload": True,
+        }
+
+    async def web_get_settings(self):
+        if not request.username:
+            return error_response("dashboard authentication required", status_code=401)
+        return json_response(
+            {
+                "config": self._web_config(self.config),
+                "summary": self._web_summary(),
+            }
+        )
+
+    async def web_save_settings(self):
+        if not request.username:
+            return error_response("dashboard authentication required", status_code=401)
+        payload = await request.json(default={})
+        if not isinstance(payload, dict):
+            return error_response("configuration must be a JSON object", status_code=400)
+        candidate = deepcopy(payload)
+        candidate_runtime = Runtime(candidate)
+        if candidate_runtime.settings is None:
+            return error_response(
+                candidate_runtime.config_error or "invalid configuration", status_code=400
+            )
+        self.config.clear()
+        self.config.update(candidate)
+        saver = getattr(self.config, "save_config", None)
+        if callable(saver):
+            saver()
+        self.runtime = candidate_runtime
+        return json_response(
+            {
+                "saved": True,
+                "config": self._web_config(self.config),
+                "summary": self._web_summary(),
+            }
+        )
 
     @filter.on_llm_request()
     async def apply_personality(self, event: AstrMessageEvent, req: ProviderRequest):

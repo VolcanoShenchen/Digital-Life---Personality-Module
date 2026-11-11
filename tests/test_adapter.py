@@ -62,6 +62,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
                 "astrbot.api.event",
                 "astrbot.api.provider",
                 "astrbot.api.star",
+                "astrbot.api.web",
             )
         }
         self.logger = Mock()
@@ -83,6 +84,13 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             permission_type=lambda value: tagged("permission", value),
         )
         modules["astrbot.api.provider"].ProviderRequest = object
+        self.web_request = types.SimpleNamespace(username="test-admin")
+        modules["astrbot.api.web"].request = self.web_request
+        modules["astrbot.api.web"].json_response = lambda payload: payload
+        modules["astrbot.api.web"].error_response = lambda message, status_code=400: {
+            "error": message,
+            "status_code": status_code,
+        }
 
         class Star:
             def __init__(self, context, config=None):
@@ -212,7 +220,39 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("SECRET", event.sent[0])
         self.assertIn("scope_adapter_error", event.sent[0])
 
-    async def test_default_constructor_does_not_enable_persona(self):
+    async def test_webui_reads_and_saves_configuration_without_model_calls(self):
+        plugin = self.plugin_type(object(), valid_config())
+        loaded = await plugin.web_get_settings()
+        self.assertEqual(loaded["config"]["character"]["name"], "测试角色")
+        updated = valid_config()
+        updated["character"]["name"] = "网页角色"
+
+        async def body(default=None):
+            return updated
+
+        self.web_request.json = body
+        saved = await plugin.web_save_settings()
+        self.assertTrue(saved["saved"])
+        self.assertEqual(plugin.runtime.settings.character.name, "网页角色")
+        self.assertEqual(saved["config"]["character"]["name"], "网页角色")
+
+    async def test_webui_rejects_invalid_configuration_without_mutating_runtime(self):
+        plugin = self.plugin_type(object(), valid_config())
+
+        async def body(default=None):
+            return valid_config(character={})
+
+        self.web_request.json = body
+        result = await plugin.web_save_settings()
+        self.assertEqual(result["status_code"], 400)
+        self.assertEqual(plugin.runtime.settings.character.name, "测试角色")
+
+    async def test_webui_requires_dashboard_authentication(self):
+        plugin = self.plugin_type(object(), valid_config())
+        self.web_request.username = None
+        result = await plugin.web_get_settings()
+        self.assertEqual(result["status_code"], 401)
+
         plugin = self.plugin_type(object())
         req = self.request()
         original = req.system_prompt

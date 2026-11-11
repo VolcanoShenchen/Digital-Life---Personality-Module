@@ -28,7 +28,11 @@ RELEASE_FILES = (
     "docs/ARCHITECTURE.md",
     "docs/ACCEPTANCE.md",
     "docs/PLAN.md",
+    "docs/WEBUI.md",
     "CONTRIBUTING.md",
+    "views/settings/index.html",
+    "views/settings/app.js",
+    "views/settings/style.css",
 )
 
 
