@@ -229,7 +229,7 @@ function renderField(config, group, field) {
   ]);
 }
 
-function App() {
+function useAppState() {
   const config = reactive(blankConfig());
   const summary = reactive({ version: "—", valid: false, enabled: false, config_error: "" });
   const active = ref("profile");
@@ -316,6 +316,26 @@ function App() {
 
   onMounted(load);
 
+  return {
+    config, summary, active, busy, message, messageKind, sections,
+    sessionsText, botsText, relationFilled, save,
+  };
+}
+
+const App = {
+  setup() {
+    const state = useAppState();
+    // Returning a render function keeps the raw refs unwrapped. Passing the
+    // state object through the component proxy would unwrap active.value.
+    return () => renderApp(state);
+  },
+};
+
+function renderApp(state) {
+  const {
+    config, summary, active, busy, message, messageKind, sections,
+    sessionsText, botsText, relationFilled, save,
+  } = state;
   return h("div", { class: "app-shell" }, [
     h("header", { class: "hero" }, [
       h("div", [
