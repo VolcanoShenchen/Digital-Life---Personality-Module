@@ -10,7 +10,7 @@ from astrbot.api.star import Context, Star
 from astrbot.api.web import error_response, json_response, request
 
 from .personality import Scope
-from .runtime import Runtime
+from .runtime import VERSION, Runtime
 
 
 def event_scope(event: AstrMessageEvent) -> Scope:
@@ -56,7 +56,7 @@ class DigitalLifePersonality(Star):
 
     def _web_summary(self) -> dict[str, Any]:
         return {
-            "version": "0.1.0",
+            "version": VERSION,
             "valid": self.runtime.settings is not None,
             "enabled": bool(self.runtime.settings and self.runtime.settings.enabled),
             "config_error": self.runtime.config_error,
