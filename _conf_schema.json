@@ -1,34 +1,204 @@
 {
-  "enabled": {"type": "bool", "description": "启用人格与表达规则", "default": false, "hint": "填写资料并选择允许的私聊会话后启用；保存后重载插件。"},
-  "persona_source": {"type": "string", "description": "人格来源", "default": "plugin", "options": ["plugin", "astrbot"], "hint": "plugin：由本插件配置角色，AstrBot 人格仅保留必要基础规则。astrbot：沿用当前 AstrBot 人格，仅调整表达。"},
-  "allowed_sessions": {"type": "list", "description": "允许生效的私聊会话", "default": [], "_special": "umo", "hint": "保存完整 UMO。留空表示不对任何会话生效，群聊不生效。可先正常私聊，再在此选择或使用 /sid 查看并手工填写。"},
-  "allowed_bot_ids": {"type": "list", "description": "允许生效的机器人 QQ 号", "default": [], "hint": "每项填写一个机器人自身 QQ 号，使用字符串。留空表示不对任何机器人生效。必须同时匹配允许会话，防止同一适配器多账号串用。"},
-  "character": {
-    "type": "object", "description": "角色资料", "items": {
-      "name": {"type": "string", "description": "角色称呼", "default": "", "hint": "plugin 模式启用时必填。"},
-      "identity": {"type": "text", "description": "身份与背景", "default": "", "hint": "plugin 模式启用时必填。填写已确认的身份、世界观和背景；不要与 AstrBot 角色身份冲突。"},
-      "personality": {"type": "text", "description": "性格、立场与偏好", "default": "", "hint": "plugin 模式启用时必填。用具体反应描述性格，包含偏好、价值观和缺点。"},
-      "boundaries": {"type": "text", "description": "相处边界", "default": "", "hint": "例如不愿意做的事、如何表达分歧或拒绝。"}
+  "enabled": {
+    "type": "bool",
+    "description": "启用人格与表达规则",
+    "default": false,
+    "hint": "填写资料并选择允许的私聊会话与机器人后启用。新增视图需要重载插件后出现。"
+  },
+  "persona_source": {
+    "type": "string",
+    "description": "人格来源",
+    "default": "plugin",
+    "options": ["plugin", "astrbot"],
+    "hint": "plugin 使用本插件的结构化角色资料；astrbot 沿用 AstrBot 人格，只补充表达。"
+  },
+  "allowed_sessions": {
+    "type": "list",
+    "description": "允许生效的完整私聊 UMO",
+    "default": [],
+    "hint": "留空不对任何会话生效。可通过 /sid 或可视化配置页选择来源。"
+  },
+  "allowed_bot_ids": {
+    "type": "list",
+    "description": "允许生效的机器人自身 QQ 号",
+    "default": [],
+    "hint": "每项一个字符串。必须与允许会话同时匹配，用于隔离多个机器人。"
+  },
+  "profile": {
+    "type": "object",
+    "description": "基础身份资料",
+    "items": {
+      "name": {"type": "string", "description": "姓名", "default": ""},
+      "nickname": {"type": "string", "description": "昵称或自称", "default": ""},
+      "gender_identity": {"type": "string", "description": "性别认同", "default": ""},
+      "pronouns": {"type": "string", "description": "代称", "default": ""},
+      "age": {"type": "string", "description": "年龄", "default": ""},
+      "age_mode": {"type": "string", "description": "年龄模式", "default": "fixed", "options": ["fixed", "growing", "timeline"]},
+      "birth_date": {"type": "string", "description": "出生日期", "default": ""},
+      "species": {"type": "string", "description": "物种", "default": ""},
+      "nationality": {"type": "string", "description": "国籍或地区", "default": ""},
+      "native_language": {"type": "string", "description": "母语", "default": ""},
+      "timezone": {"type": "string", "description": "所在时区", "default": ""},
+      "location": {"type": "string", "description": "所在地", "default": ""},
+      "occupation": {"type": "string", "description": "职业", "default": ""},
+      "education": {"type": "text", "description": "教育背景", "default": ""},
+      "social_status": {"type": "text", "description": "社会身份", "default": ""}
+    }
+  },
+  "background": {
+    "type": "object",
+    "description": "经历与世界设定",
+    "items": {
+      "identity": {"type": "text", "description": "身份与背景（plugin 模式必填）", "default": ""},
+      "family": {"type": "text", "description": "家庭关系", "default": ""},
+      "childhood": {"type": "text", "description": "童年经历", "default": ""},
+      "education_history": {"type": "text", "description": "学习经历", "default": ""},
+      "work_history": {"type": "text", "description": "工作经历", "default": ""},
+      "important_events": {"type": "list", "description": "重要事件", "default": []},
+      "current_situation": {"type": "text", "description": "当前处境", "default": ""},
+      "secrets": {"type": "list", "description": "秘密", "default": []},
+      "world_setting": {"type": "text", "description": "世界设定", "default": ""},
+      "known_facts": {"type": "text", "description": "明确知道的内容", "default": ""},
+      "unknown_facts": {"type": "text", "description": "明确不知道的内容", "default": ""}
+    }
+  },
+  "personality": {
+    "type": "object",
+    "description": "性格核心",
+    "items": {
+      "core_traits": {"type": "list", "description": "核心性格", "default": []},
+      "positive_traits": {"type": "list", "description": "优点", "default": []},
+      "flaws": {"type": "list", "description": "缺点", "default": []},
+      "values": {"type": "list", "description": "价值观", "default": []},
+      "dislikes": {"type": "list", "description": "偏好与反感", "default": []},
+      "fears": {"type": "list", "description": "恐惧与担忧", "default": []},
+      "desires": {"type": "list", "description": "欲望与目标", "default": []},
+      "insecurities": {"type": "list", "description": "不安全感", "default": []},
+      "pride": {"type": "list", "description": "自豪之处", "default": []},
+      "contradictions": {"type": "list", "description": "性格矛盾", "default": []},
+      "self_image": {"type": "text", "description": "自我评价", "default": ""},
+      "view_of_others": {"type": "text", "description": "对他人的看法", "default": ""},
+      "changeability": {"type": "string", "description": "性格稳定程度", "default": "stable", "options": ["stable", "influenced", "adaptive"]},
+      "social_temperature": {"type": "string", "description": "社交温度", "default": "slow", "options": ["slow", "moderate", "outgoing"]},
+      "legacy_summary": {"type": "text", "description": "旧版性格补充", "default": ""}
+    }
+  },
+  "behavior": {
+    "type": "object",
+    "description": "情境行为规则",
+    "items": {
+      "when_happy": {"type": "text", "description": "开心时", "default": ""},
+      "when_sad": {"type": "text", "description": "难过时", "default": ""},
+      "when_angry": {"type": "text", "description": "生气时", "default": ""},
+      "when_tired": {"type": "text", "description": "疲惫时", "default": ""},
+      "when_embarrassed": {"type": "text", "description": "尴尬时", "default": ""},
+      "when_anxious": {"type": "text", "description": "焦虑时", "default": ""},
+      "when_bored": {"type": "text", "description": "无聊时", "default": ""},
+      "when_confused": {"type": "text", "description": "困惑时", "default": ""},
+      "when_praised": {"type": "text", "description": "被夸奖时", "default": ""},
+      "when_criticized": {"type": "text", "description": "被批评时", "default": ""},
+      "when_disagrees": {"type": "text", "description": "意见不同时", "default": ""},
+      "when_apologizing": {"type": "text", "description": "道歉时", "default": ""},
+      "when_refusing": {"type": "text", "description": "拒绝时", "default": ""},
+      "when_ignored": {"type": "text", "description": "被冷落时", "default": ""},
+      "when_topic_changes": {"type": "text", "description": "换话题时", "default": ""},
+      "when_memory_missing": {"type": "text", "description": "缺少记忆时", "default": ""}
+    }
+  },
+  "speech": {
+    "type": "object",
+    "description": "说话方式",
+    "items": {
+      "first_person": {"type": "string", "description": "自称", "default": ""},
+      "second_person": {"type": "string", "description": "对用户的称呼", "default": ""},
+      "vocabulary": {"type": "text", "description": "常用词汇与句式", "default": ""},
+      "avoided_words": {"type": "list", "description": "避免使用的词", "default": []},
+      "sentence_length": {"type": "string", "description": "句子长度", "default": "adaptive", "options": ["adaptive", "short", "medium", "long"]},
+      "punctuation": {"type": "text", "description": "标点习惯", "default": ""},
+      "question_frequency": {"type": "string", "description": "提问频率", "default": "necessary", "options": ["never", "necessary", "often"]},
+      "emoji_frequency": {"type": "string", "description": "表情频率", "default": "occasional", "options": ["none", "occasional", "frequent"]},
+      "humor_style": {"type": "text", "description": "幽默方式", "default": ""},
+      "affection_style": {"type": "text", "description": "表达在意", "default": ""},
+      "disagreement_style": {"type": "text", "description": "表达分歧", "default": ""},
+      "apology_style": {"type": "text", "description": "道歉方式", "default": ""},
+      "refusal_style": {"type": "text", "description": "拒绝方式", "default": ""},
+      "greeting_style": {"type": "text", "description": "打招呼", "default": ""},
+      "goodbye_style": {"type": "text", "description": "结束话题", "default": ""},
+      "correction_style": {"type": "text", "description": "纠正方式", "default": ""},
+      "topic_transition": {"type": "text", "description": "话题转换", "default": ""},
+      "silence_tolerance": {"type": "text", "description": "沉默与留白", "default": ""},
+      "habits": {"type": "text", "description": "固定说话习惯", "default": ""},
+      "tone": {"type": "string", "description": "基础语气", "default": "follow_character", "options": ["follow_character", "gentle", "playful", "reserved"]},
+      "extra": {"type": "text", "description": "补充表达偏好", "default": ""}
+    }
+  },
+  "response": {
+    "type": "object",
+    "description": "回复策略",
+    "items": {
+      "length": {"type": "string", "description": "默认回复长度", "default": "adaptive", "options": ["adaptive", "brief", "expanded"]},
+      "answer_first": {"type": "bool", "description": "先直接回答", "default": true},
+      "ask_followup": {"type": "string", "description": "追问频率", "default": "necessary", "options": ["never", "necessary", "often"]},
+      "offer_advice": {"type": "string", "description": "建议策略", "default": "when_requested", "options": ["when_requested", "relevant", "default"]},
+      "repeat_user": {"type": "bool", "description": "复述用户内容", "default": false},
+      "handle_unknown": {"type": "text", "description": "不知道时怎么说", "default": "自然承认不知道，不把猜测说成事实。"},
+      "avoid_cliches": {"type": "bool", "description": "减少固定套话", "default": true},
+      "avoid_psychological_analysis": {"type": "bool", "description": "避免擅自心理分析", "default": true},
+      "avoid_over_affection": {"type": "bool", "description": "避免过度亲密", "default": true},
+      "reduce_cliches": {"type": "bool", "description": "减少重复安慰", "default": true}
+    }
+  },
+  "roleplay": {
+    "type": "object",
+    "description": "动作与场景",
+    "items": {
+      "action_style": {"type": "string", "description": "动作描写", "default": "none", "options": ["none", "occasional", "scene"]},
+      "action_format": {"type": "string", "description": "动作格式", "default": "short_narration", "options": ["parentheses", "short_narration", "natural"]},
+      "environment_detail": {"type": "string", "description": "环境细节", "default": "light", "options": ["none", "light", "rich"]},
+      "inner_monologue": {"type": "bool", "description": "允许内心独白", "default": false},
+      "sensory_detail": {"type": "bool", "description": "允许感官细节", "default": false}
+    }
+  },
+  "boundaries": {
+    "type": "object",
+    "description": "边界保护",
+    "items": {
+      "uncomfortable_topics": {"type": "list", "description": "不适合主动讨论的话题", "default": []},
+      "forbidden_actions": {"type": "list", "description": "不会声称完成的行为", "default": []},
+      "refusal_level": {"type": "string", "description": "拒绝强度", "default": "clear", "options": ["gentle", "clear", "firm"]},
+      "privacy_rules": {"type": "text", "description": "隐私边界", "default": ""},
+      "reality_claims": {"type": "text", "description": "现实行为边界", "default": "不要把未知的现实行为说成已经完成。"},
+      "memory_claims": {"type": "text", "description": "记忆边界", "default": "不要把示例、推测或缺失上下文当作真实记忆。"},
+      "tool_claims": {"type": "text", "description": "工具结果边界", "default": "不要把计划或建议说成工具已经执行。"},
+      "role_integrity": {"type": "text", "description": "角色完整性", "default": "不要为了迎合用户随意改变已确认的核心身份。"},
+      "roleplay": {"type": "text", "description": "场景扮演边界", "default": ""}
     }
   },
   "relationship": {
-    "type": "object", "description": "专属关系（仅指定私聊）", "items": {
-      "target_session": {"type": "string", "description": "关系归属会话", "default": "", "_special": "umo", "hint": "必须属于允许会话。关系背景或称呼不为空时必填；其他允许会话不会继承。"},
-      "target_bot_id": {"type": "string", "description": "关系归属机器人 QQ 号", "default": "", "hint": "必须属于允许的机器人列表，与目标会话共同定位关系。关系背景或称呼不为空时必填。"},
-      "background": {"type": "text", "description": "关系背景", "default": "", "hint": "双方已确认的关系和相处阶段。不填写时不预设恋人或朋友关系。"},
-      "addressing": {"type": "text", "description": "双方称呼与使用场景", "default": "", "hint": "仅对关系归属会话生效。"}
+    "type": "object",
+    "description": "专属关系",
+    "items": {
+      "target_session": {"type": "string", "description": "关系归属会话 UMO", "default": ""},
+      "target_bot_id": {"type": "string", "description": "关系归属机器人 QQ", "default": ""},
+      "role": {"type": "string", "description": "关系角色", "default": ""},
+      "stage": {"type": "string", "description": "关系阶段", "default": ""},
+      "duration": {"type": "string", "description": "认识时长", "default": ""},
+      "background": {"type": "text", "description": "关系背景", "default": ""},
+      "addressing": {"type": "text", "description": "角色如何称呼用户", "default": ""},
+      "addressing_for_character": {"type": "text", "description": "用户如何称呼角色", "default": ""},
+      "shared_history": {"type": "list", "description": "共同经历", "default": []},
+      "shared_interests": {"type": "list", "description": "共同兴趣", "default": []},
+      "trust_level": {"type": "string", "description": "信任程度", "default": ""},
+      "intimacy_boundary": {"type": "text", "description": "亲密边界", "default": ""},
+      "sensitive_topics": {"type": "list", "description": "敏感话题", "default": []},
+      "conflict_style": {"type": "text", "description": "冲突处理", "default": ""},
+      "repair_style": {"type": "text", "description": "关系修复", "default": ""}
     }
   },
-  "expression": {
-    "type": "object", "description": "表达习惯", "items": {
-      "habits": {"type": "text", "description": "固定说话习惯", "default": "", "hint": "例如熟悉后轻轻吐槽，认真时少用语气词，不习惯反复叫名字。"},
-      "tone": {"type": "string", "description": "语气偏好", "default": "follow_character", "options": ["follow_character", "gentle", "playful", "reserved"], "hint": "依次为遵循角色、温和、轻松调侃、克制。"},
-      "length": {"type": "string", "description": "闲聊长度偏好", "default": "adaptive", "options": ["adaptive", "brief", "expanded"], "hint": "依次为随内容调整、偏简短、充分表达。不会截断回复或限制认真任务。"},
-      "actions": {"type": "string", "description": "动作与旁白", "default": "none", "options": ["none", "occasional", "scene"], "hint": "依次为直接聊天、偶尔简短动作、场景扮演。"},
-      "emoji": {"type": "string", "description": "表情与语气词", "default": "occasional", "options": ["occasional", "none", "frequent"], "hint": "依次为少量、通常不用、较多。通过提示引导，仍需试聊调整。"},
-      "reduce_cliches": {"type": "bool", "description": "减少客服套话、固定安慰和机械追问", "default": true},
-      "extra": {"type": "text", "description": "其他表达偏好", "default": "", "hint": "少量补充，避免重复或相互矛盾的要求。"}
-    }
-  },
-  "examples": {"type": "text", "description": "理想对话示例", "default": "", "hint": "建议 3～8 组：情境：……\n用户：……\n角色：……。仅示范表达，不作为真实历史或经历。全部用户填写文本合计不超过 12000 字符。"}
+  "examples": {
+    "type": "text",
+    "description": "对话示例",
+    "default": "",
+    "hint": "建议使用“情境 / 用户 / 角色”格式。仅作为表达示范，不作为真实记忆。"
+  }
 }

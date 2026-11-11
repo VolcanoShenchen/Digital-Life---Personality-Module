@@ -1,93 +1,13 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>人格与表达配置</title>
-  <link rel="stylesheet" href="./style.css" />
-</head>
-<body>
-  <main class="shell">
-    <header>
-      <div>
-        <p class="eyebrow">General purpose personality plugin</p>
-        <h1>人格与表达</h1>
-        <p class="subtitle">配置角色资料、私聊范围和回复习惯。保存后当前插件运行时立即更新。</p>
-      </div>
-      <div id="summary" class="status-card">正在读取配置…</div>
-    </header>
-
-    <div id="message" class="message" hidden></div>
-
-    <form id="settings-form">
-      <section class="panel">
-        <h2>基础设置</h2>
-        <div class="grid two">
-          <label class="toggle"><input id="enabled" type="checkbox" /><span>启用人格与表达规则</span></label>
-          <label>人格来源
-            <select id="persona_source"><option value="plugin">由本插件管理角色</option><option value="astrbot">沿用 AstrBot 人格，仅调整表达</option></select>
-          </label>
-        </div>
-        <div class="grid two">
-          <label>允许的私聊会话 UMO
-            <textarea id="allowed_sessions" rows="3" placeholder="每行一个完整 UMO，例如 qq-main:FriendMessage:10001"></textarea>
-            <small>留空不会对任何会话生效。使用 /sid 或会话选择器获取完整值。</small>
-          </label>
-          <label>允许的机器人 QQ 号
-            <textarea id="allowed_bot_ids" rows="3" placeholder="每行一个机器人自身 QQ 号"></textarea>
-            <small>必须同时匹配会话，用于隔离同一适配器上的多个机器人。</small>
-          </label>
-        </div>
-      </section>
-
-      <section class="panel">
-        <h2>角色人格</h2>
-        <div class="grid two">
-          <label>角色称呼<input id="character_name" type="text" /></label>
-          <label>身份与背景<textarea id="character_identity" rows="5"></textarea></label>
-        </div>
-        <label>性格、立场与偏好<textarea id="character_personality" rows="6"></textarea></label>
-        <label>相处边界<textarea id="character_boundaries" rows="4"></textarea></label>
-      </section>
-
-      <section class="panel">
-        <h2>专属关系</h2>
-        <p class="hint">只有目标会话和目标机器人同时匹配时才会注入；其他允许会话不会继承。</p>
-        <div class="grid two">
-          <label>关系归属会话<input id="relationship_target_session" type="text" placeholder="完整 UMO" /></label>
-          <label>关系归属机器人<input id="relationship_target_bot_id" type="text" /></label>
-        </div>
-        <label>关系背景<textarea id="relationship_background" rows="4"></textarea></label>
-        <label>双方称呼与使用场景<textarea id="relationship_addressing" rows="3"></textarea></label>
-      </section>
-
-      <section class="panel">
-        <h2>表达习惯</h2>
-        <div class="grid three">
-          <label>基础语气<select id="expression_tone"><option value="follow_character">遵循角色</option><option value="gentle">温和</option><option value="playful">轻松调侃</option><option value="reserved">克制</option></select></label>
-          <label>闲聊长度<select id="expression_length"><option value="adaptive">随内容调整</option><option value="brief">偏简短</option><option value="expanded">充分表达</option></select></label>
-          <label>动作与旁白<select id="expression_actions"><option value="none">直接聊天</option><option value="occasional">偶尔动作</option><option value="scene">场景扮演</option></select></label>
-        </div>
-        <div class="grid two">
-          <label>表情与语气词<select id="expression_emoji"><option value="occasional">少量</option><option value="none">通常不用</option><option value="frequent">较多</option></select></label>
-          <label class="toggle"><input id="expression_reduce_cliches" type="checkbox" /><span>减少客服套话、固定安慰和机械追问</span></label>
-        </div>
-        <label>固定说话习惯<textarea id="expression_habits" rows="4" placeholder="例如：熟悉后会轻轻吐槽，认真时少用语气词。"></textarea></label>
-        <label>其他表达偏好<textarea id="expression_extra" rows="3"></textarea></label>
-      </section>
-
-      <section class="panel">
-        <h2>对话示例</h2>
-        <p class="hint">只示范节奏和措辞，不会作为真实历史、经历或工具执行结果。</p>
-        <textarea id="examples" rows="10" placeholder="情境：普通闲聊\n用户：我刚回家。\n角色：路上顺利吗？"></textarea>
-      </section>
-
-      <footer>
-        <span id="save-hint">保存后规则立即应用到新请求。</span>
-        <button id="save" type="submit">保存配置</button>
-      </footer>
-    </form>
-  </main>
-  <script type="module" src="./app.js"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>人格与表达配置</title>
+    <script type="module" crossorigin src="/assets/index-Do17SlsO.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-B01kzwU-.css">
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
 </html>

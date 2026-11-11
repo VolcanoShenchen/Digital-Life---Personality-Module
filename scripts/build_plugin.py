@@ -11,7 +11,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ID = "astrbot_plugin_digital_life_personality"
-RELEASE_FILES = (
+BASE_RELEASE_FILES = (
     "__init__.py",
     "main.py",
     "settings.py",
@@ -29,10 +29,8 @@ RELEASE_FILES = (
     "docs/ACCEPTANCE.md",
     "docs/PLAN.md",
     "docs/WEBUI.md",
+    "docs/FIELD_MAPPING.md",
     "CONTRIBUTING.md",
-    "views/settings/index.html",
-    "views/settings/app.js",
-    "views/settings/style.css",
 )
 
 
@@ -40,14 +38,33 @@ class PackageError(ValueError):
     pass
 
 
+def view_files(root: Path = ROOT) -> tuple[str, ...]:
+    """Collect the built view; asset names contain Vite content hashes."""
+    folder = root / "views/settings"
+    files = sorted(
+        path.relative_to(root).as_posix() for path in folder.rglob("*") if path.is_file()
+    )
+    if "views/settings/index.html" not in files:
+        raise PackageError("Build the Vue view before packaging")
+    if not any(name.startswith("views/settings/assets/") for name in files):
+        raise PackageError("Vue view assets are missing")
+    return tuple(files)
+
+
+def release_files(root: Path = ROOT) -> tuple[str, ...]:
+    return BASE_RELEASE_FILES + view_files(root)
+
+
 def check_payload(payload: dict[str, bytes]) -> str:
-    if set(payload) != set(RELEASE_FILES):
+    if set(payload) != set(release_files()):
         raise PackageError("Archive must contain exactly the complete release allowlist")
     for name, content in payload.items():
         if not content:
             raise PackageError(f"Empty release file: {name}")
         if name.endswith(".py"):
             compile(content, name, "exec")
+    if b"src/main.js" in payload["views/settings/index.html"]:
+        raise PackageError("Unbuilt frontend entry leaked into the release")
     metadata = payload["metadata.yaml"].decode("utf-8")
     versions = re.findall(r"^version: ([0-9]+\.[0-9]+\.[0-9]+)$", metadata, re.MULTILINE)
     if len(versions) != 1:
@@ -91,17 +108,15 @@ def verify_archive(path: Path) -> str:
                 or archive.getinfo(name).is_dir()
             ):
                 raise PackageError("Unexpected archive path")
-            relative = "/".join(parts[1:])
-            payload[relative] = archive.read(name)
-        bad_member = archive.testzip()
-        if bad_member:
+            payload["/".join(parts[1:])] = archive.read(name)
+        if archive.testzip():
             raise PackageError("Archive CRC check failed")
         return check_payload(payload)
 
 
 def build_archive(root: Path, output: Path) -> Path:
     payload = {}
-    for name in RELEASE_FILES:
+    for name in release_files(root):
         file_path = root / name
         if not file_path.is_file():
             raise PackageError(f"Missing release file: {name}")

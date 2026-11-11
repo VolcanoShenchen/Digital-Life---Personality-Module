@@ -1,6 +1,7 @@
 """The release must be complete and reject altered or unexpected members."""
 
 import hashlib
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,33 +12,46 @@ from tests.support import ROOT
 
 
 class PackageTests(unittest.TestCase):
+    def payload(self):
+        return {name: (ROOT / name).read_bytes() for name in build_plugin.release_files()}
+
     def test_build_verifies_complete_allowlist_and_digest(self):
         with tempfile.TemporaryDirectory() as directory:
             path = build_plugin.build_archive(ROOT, Path(directory))
-            self.assertEqual(build_plugin.verify_archive(path), "0.1.0")
+            version = re.search(
+                r'VERSION = "([0-9.]+)"', (ROOT / "runtime.py").read_text("utf-8")
+            ).group(1)
+            self.assertEqual(build_plugin.verify_archive(path), version)
             with ZipFile(path) as archive:
                 names = archive.namelist()
-                self.assertEqual(len(names), len(build_plugin.RELEASE_FILES))
+                self.assertEqual(len(names), len(build_plugin.release_files()))
                 self.assertTrue(
                     all(name.startswith(build_plugin.PLUGIN_ID + "/") for name in names)
                 )
+                self.assertTrue(any("/views/settings/assets/" in name for name in names))
                 self.assertFalse(any(".git/" in name or "__pycache__" in name for name in names))
             recorded = path.with_suffix(".zip.sha256").read_text("utf-8").split()[0]
             self.assertEqual(recorded, hashlib.sha256(path.read_bytes()).hexdigest())
             with self.assertRaises(build_plugin.PackageError):
                 build_plugin.build_archive(ROOT, Path(directory))
 
+    def test_unbuilt_frontend_entry_is_rejected(self):
+        payload = self.payload()
+        payload["views/settings/index.html"] = b'<script type="module" src="/src/main.js"></script>'
+        with self.assertRaises(build_plugin.PackageError):
+            build_plugin.check_payload(payload)
+
     def test_incomplete_package_is_rejected(self):
-        payload = {name: (ROOT / name).read_bytes() for name in build_plugin.RELEASE_FILES}
+        payload = self.payload()
         del payload["main.py"]
         with self.assertRaises(build_plugin.PackageError):
             build_plugin.check_payload(payload)
 
     def test_changed_versions_or_enabled_defaults_are_rejected(self):
-        payload = {name: (ROOT / name).read_bytes() for name in build_plugin.RELEASE_FILES}
+        payload = self.payload()
         changed = payload.copy()
-        changed["runtime.py"] = changed["runtime.py"].replace(
-            b'VERSION = "0.1.0"', b'VERSION = "9.9.9"'
+        changed["runtime.py"] = re.sub(
+            rb'VERSION = "[0-9.]+"', b'VERSION = "9.9.9"', changed["runtime.py"]
         )
         with self.assertRaises(build_plugin.PackageError):
             build_plugin.check_payload(changed)
@@ -60,7 +74,7 @@ class PackageTests(unittest.TestCase):
                     build_plugin.verify_archive(archive_path)
 
     def test_runtime_configuration_cannot_be_added_to_a_release(self):
-        payload = {name: (ROOT / name).read_bytes() for name in build_plugin.RELEASE_FILES}
+        payload = self.payload()
         payload["data/chat.json"] = b"{}"
         with self.assertRaises(build_plugin.PackageError):
             build_plugin.check_payload(payload)

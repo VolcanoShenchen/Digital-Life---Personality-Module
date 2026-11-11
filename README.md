@@ -1,40 +1,48 @@
 # General_purpose_personality_plugin
 
-AstrBot 私聊人格与表达插件，预览版本 `0.1.0`。
+AstrBot 私聊人格与表达插件，预览版本 `0.2.0`。
 
-通过 AstrBot 正常聊天请求加入可配置的角色、语言习惯和示例，复用宿主的模型、历史、工具和消息发送。当前目标平台为 NapCat 经 AstrBot `aiocqhttp` 适配器接入的 QQ 私聊。
+通过 AstrBot 正常聊天请求加入结构化角色资料、情境行为、语言习惯和回复策略，复用宿主的模型、历史、工具和消息发送。当前目标平台为 NapCat 经 AstrBot `aiocqhttp` 适配器接入的 QQ 私聊。
 
 ## 当前状态
 
-- 已实现首版代码、配置面板、管理员诊断、关键测试与完整安装包构建。
+- 已实现结构化人格配置、两种人格来源、管理员诊断、Vue 配置页面与完整安装包构建。
 - 开发基线：AstrBot **4.29.4**、Python **3.12+**、内置 Agent。元数据暂限定 `==4.29.4`。
-- 已完成 49 项本地测试、完整宿主启动/插件加载及真实事件与请求对象烟测；QQ 收发、模型/工具/流式和角色效果仍待验证。
-- 首版是供隔离测试的预览版。详细结果见 [验证记录](docs/VALIDATION.md)。
+- 已完成 60 项本地测试、完整宿主启动/插件加载、Vue 页面发现及真实配置 API 烟测；QQ 收发、模型/工具/流式和角色效果仍待验证。
+- 本版是供隔离测试的预览版。详细结果见 [验证记录](docs/VALIDATION.md)。
 
 ## 功能
 
-- 单角色：身份、性格、价值观、偏好和边界均可配置。
-- 两种来源：`plugin` 管理完整人格；`astrbot` 沿用当前宿主人格，仅调整表达。
-- 语气、闲聊长度、动作描写、表情、说话习惯和对话示例。
+- 单角色结构化资料：姓名、性别认同、年龄、职业、经历、世界观和边界。
+- 性格拆分为核心特征、优点、缺点、价值观、恐惧、欲望、矛盾与自我评价。
+- 情境行为：开心、难过、生气、疲惫、被夸奖、被批评、意见不同、道歉、拒绝等。
+- 语言与回复策略：自称、称呼、词汇、句式、标点、幽默、追问、建议、套话控制。
+- 两种来源：`plugin` 管理完整人格；`astrbot` 沿用当前宿主人格，仅补充表达。
 - 双重作用域：必须同时匹配完整私聊 UMO 与机器人自身 QQ 号。
-- 一条专属关系：同时绑定指定私聊与机器人，其他会话不会继承。
+- 一条专属关系：可描述关系角色、阶段、称呼、共同经历、信任、冲突与修复方式。
 - 管理员私聊命令 `/人格状态`，只展示注入判定，不显示完整资料。
 - 安装后默认关闭；空会话名单或空机器人名单均不会生效。
 
 首版不含持久情绪、长期记忆、多角色、主动联系、生活日程、分段发送或语音生图。聊天中的短期承接依赖 AstrBot 提供的上下文。语气通过模型提示引导，效果需要实际试聊，规则本身会增加输入 token。
 
+## 配置入口
+
+在 AstrBot WebUI 的插件详情中打开 `settings` 视图。页面按区域组织全部字段，保存时严格校验；详见 [配置 WebUI](docs/WEBUI.md)。
+
+也可使用 AstrBot 原生插件配置页。旧版 `character.*` 和 `expression.*` 字段仍可读取，并在加载时迁移到结构化区域，便于逐步调整。
+
 ## 开始测试
 
 1. 核对目标 AstrBot 版本、Python 及 Agent 执行方式。
 2. 上传完整 ZIP，或将插件目录放入 AstrBot 插件目录。
-3. 在插件配置页选择人格来源，填写角色资料。
-4. 填写 `allowed_sessions` 完整私聊 UMO 及 `allowed_bot_ids` 机器人 QQ 号。
-5. 如需专属关系，同时填写 `relationship.target_session` 和 `relationship.target_bot_id`。
+3. 打开 `settings` 视图或原生配置页，填写角色资料。
+4. 填写完整私聊 UMO 与机器人自身 QQ 号。
+5. 如需专属关系，同时填写关系目标会话和机器人。
 6. 启用、保存并重载，私聊测试；管理员可发送 `/人格状态`。
 
-安装详情、示例配置和原因码见 [安装说明](docs/INSTALL.md)。
+安装详情、原因码和字段说明见 [安装说明](docs/INSTALL.md)。
 
-`plugin` 模式要求角色称呼、身份和性格非空。请将目标 AstrBot 人格整理为必要基础规则，避免两处重复定义身份；插件不会自动覆盖宿主人格或工具说明。
+`plugin` 模式要求角色姓名、身份背景和核心性格非空。请将目标 AstrBot 人格整理为必要基础规则，避免两处重复定义身份；插件不会自动覆盖宿主人格或工具说明。
 
 ## 名称与仓库
 
@@ -46,20 +54,27 @@ AstrBot 私聊人格与表达插件，预览版本 `0.1.0`。
 
 ## 开发与构建
 
-在 Python 3.12+ 环境中执行：
+Python 3.12+：
 
 ```bash
 python -m pip install -r requirements-dev.txt
 python -m ruff check .
 python -m ruff format --check .
 python -m unittest discover -s tests -v
-python scripts/build_plugin.py
-python scripts/build_plugin.py --verify dist/astrbot_plugin_digital_life_personality-v0.1.0.zip
+python scripts/build_plugin.py --output dist/preview
+python scripts/build_plugin.py --verify dist/preview/astrbot_plugin_digital_life_personality-v0.2.0.zip
 ```
 
-构建器使用显式文件清单，输出 ZIP 和 SHA-256 校验文件。默认输出已存在时会拒绝覆盖，请选择新的 `--output` 目录。
+前端使用 Vue 3 + Vite。首次构建需要 Node.js 20+ 与 pnpm：
 
-运行只依赖 Python 标准库及 AstrBot 自带 API；本仓库不包含 AstrBot 或 QQ 登录环境。
+```bash
+pnpm install
+pnpm run build
+```
+
+页面源码位于 `frontend/`，构建产物输出到 `views/settings/`。发行包只包含构建后的静态页面，不包含 Node 依赖；打包器会检查未构建的前端入口并拒绝生成安装包。
+
+构建器按显式清单打包，并自动收录 Vite 生成的哈希资源，输出 ZIP 与 SHA-256。运行只依赖 Python 标准库和 AstrBot 自带 API；本仓库不包含 AstrBot、Node 或 QQ 登录环境。
 
 ## 文档
 
@@ -69,6 +84,7 @@ python scripts/build_plugin.py --verify dist/astrbot_plugin_digital_life_persona
 - [验收方案](docs/ACCEPTANCE.md)
 - [安装说明](docs/INSTALL.md)
 - [配置 WebUI](docs/WEBUI.md)
+- [字段拆分对照清单](docs/FIELD_MAPPING.md)
 - [验证记录](docs/VALIDATION.md)
 - [变更记录](CHANGELOG.md)
 - [开发约定](CONTRIBUTING.md)
