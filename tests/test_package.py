@@ -15,13 +15,15 @@ class PackageTests(unittest.TestCase):
     def payload(self):
         return {name: (ROOT / name).read_bytes() for name in build_plugin.release_files()}
 
+    def current_version(self):
+        return re.search(r'VERSION = "([0-9.]+)"', (ROOT / "runtime.py").read_text("utf-8")).group(
+            1
+        )
+
     def test_build_verifies_complete_allowlist_and_digest(self):
         with tempfile.TemporaryDirectory() as directory:
             path = build_plugin.build_archive(ROOT, Path(directory))
-            version = re.search(
-                r'VERSION = "([0-9.]+)"', (ROOT / "runtime.py").read_text("utf-8")
-            ).group(1)
-            self.assertEqual(build_plugin.verify_archive(path), version)
+            self.assertEqual(build_plugin.verify_archive(path), self.current_version())
             with ZipFile(path) as archive:
                 names = archive.namelist()
                 self.assertEqual(len(names), len(build_plugin.release_files()))
@@ -40,6 +42,23 @@ class PackageTests(unittest.TestCase):
         payload["views/settings/index.html"] = b'<script type="module" src="/src/main.js"></script>'
         with self.assertRaises(build_plugin.PackageError):
             build_plugin.check_payload(payload)
+
+    def test_root_absolute_view_assets_are_rejected(self):
+        # AstrBot serves views under a tokenised subpath, so "/assets/..." 404s.
+        payload = self.payload()
+        payload["views/settings/index.html"] = (
+            b'<script type="module" src="/assets/index-abc.js"></script>'
+        )
+        with self.assertRaises(build_plugin.PackageError):
+            build_plugin.check_payload(payload)
+
+    def test_relative_view_assets_are_accepted(self):
+        payload = self.payload()
+        payload["views/settings/index.html"] = (
+            b'<script type="module" src="./assets/index-abc.js"></script>'
+            b'<link rel="stylesheet" href="./assets/index-abc.css">'
+        )
+        self.assertEqual(build_plugin.check_payload(payload), self.current_version())
 
     def test_incomplete_package_is_rejected(self):
         payload = self.payload()

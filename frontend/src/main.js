@@ -254,10 +254,36 @@ function App() {
     ["background", "addressing", "role", "stage", "target_session"]
       .some((key) => Boolean(config.relationship[key])));
 
+  async function connect() {
+    if (!bridge || typeof bridge.ready !== "function") {
+      throw new Error("未检测到 AstrBot 插件桥接，请从插件详情页打开此视图");
+    }
+    // The bridge only resolves after the dashboard parent replies. A missing
+    // reply must not leave the page waiting forever.
+    await Promise.race([
+      bridge.ready(),
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error("等待 AstrBot 面板握手超时，请从插件详情页打开此视图")),
+          8000,
+        )),
+    ]);
+  }
+
+  function withTimeout(promise, message) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(message)), 12000)),
+    ]);
+  }
+
   async function load() {
     try {
-      await bridge.ready();
-      const result = await bridge.apiGet("settings");
+      await connect();
+      const result = await withTimeout(
+        bridge.apiGet("settings"),
+        "读取配置超时，请刷新或从插件详情页重新打开",
+      );
       mergeDeep(config, result.config || {});
       Object.assign(summary, result.summary || {});
     } catch (error) {
@@ -270,8 +296,12 @@ function App() {
     busy.value = true;
     message.value = "保存中…";
     try {
+      await connect();
       const payload = JSON.parse(JSON.stringify(config));
-      const result = await bridge.apiPost("settings", payload);
+      const result = await withTimeout(
+        bridge.apiPost("settings", payload),
+        "保存超时，请确认插件仍已启用后重试",
+      );
       mergeDeep(config, result.config || payload);
       Object.assign(summary, result.summary || {});
       message.value = "已保存，新请求立即使用新配置。";
@@ -286,7 +316,7 @@ function App() {
 
   onMounted(load);
 
-  return () => h("div", { class: "app-shell" }, [
+  return h("div", { class: "app-shell" }, [
     h("header", { class: "hero" }, [
       h("div", [
         h("p", { class: "eyebrow" }, "DIGITAL LIFE · PERSONALITY"),

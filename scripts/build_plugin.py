@@ -65,6 +65,10 @@ def check_payload(payload: dict[str, bytes]) -> str:
             compile(content, name, "exec")
     if b"src/main.js" in payload["views/settings/index.html"]:
         raise PackageError("Unbuilt frontend entry leaked into the release")
+    view_html = payload["views/settings/index.html"].decode("utf-8")
+    for attribute in re.findall(r'(?:src|href)="([^"]+)"', view_html):
+        if attribute.startswith("/"):
+            raise PackageError("View assets must use relative URLs for the dashboard iframe path")
     metadata = payload["metadata.yaml"].decode("utf-8")
     versions = re.findall(r"^version: ([0-9]+\.[0-9]+\.[0-9]+)$", metadata, re.MULTILINE)
     if len(versions) != 1:
