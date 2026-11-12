@@ -30,6 +30,7 @@ BASE_RELEASE_FILES = (
     "docs/PLAN.md",
     "docs/WEBUI.md",
     "docs/FIELD_MAPPING.md",
+    "docs/IDENTITY_AUTHORITY.md",
     "CONTRIBUTING.md",
 )
 

@@ -122,7 +122,36 @@ class StructuredPromptTests(unittest.TestCase):
         self.assertEqual(parsed.background.identity, "合成测试中的虚构角色。")
         self.assertEqual(parsed.personality.legacy_summary, "表达克制，有自己的判断。")
 
-    def test_structured_config_reaches_runtime_request(self):
+    def test_character_owner_adds_identity_authority_contract(self):
+        config = structured_config(
+            persona_authority={
+                "mode": "character_owner",
+                "suppress_generic_assistant_identity": True,
+                "allow_technical_identity_disclosure": True,
+            }
+        )
+        parsed = settings.Settings.parse(config)
+        prompt = personality.build_persona(parsed)
+        self.assertIn("<identity_authority>", prompt)
+        self.assertIn("AstrBot、插件、模型和聊天机器人只是承载对话的运行环境", prompt)
+        self.assertIn("<host_compatibility>", prompt)
+        self.assertIn("<final_character_check>", prompt)
+
+    def test_overlay_keeps_legacy_identity_contract(self):
+        prompt = personality.build_persona(settings.Settings.parse(structured_config()))
+        self.assertNotIn("<identity_authority>", prompt)
+        self.assertNotIn("<final_character_check>", prompt)
+
+    def test_character_owner_requires_plugin_identity_source(self):
+        config = structured_config(
+            persona_source="astrbot",
+            persona_authority={"mode": "character_owner"},
+        )
+        with self.assertRaises(settings.ConfigError) as caught:
+            settings.Settings.parse(config)
+        self.assertEqual(caught.exception.field, "persona_authority.mode")
+        self.assertEqual(caught.exception.code, "requires_plugin_persona")
+
         engine = runtime.Runtime(structured_config())
         outcome = engine.apply("HOST", self.scope())
         self.assertEqual(outcome.reason, "applied")

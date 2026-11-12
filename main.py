@@ -59,6 +59,9 @@ class DigitalLifePersonality(Star):
             "version": VERSION,
             "valid": self.runtime.settings is not None,
             "enabled": bool(self.runtime.settings and self.runtime.settings.enabled),
+            "authority_mode": self.runtime.settings.persona_authority.mode
+            if self.runtime.settings
+            else "overlay",
             "config_error": self.runtime.config_error,
             "runtime_applies_on_reload": True,
         }

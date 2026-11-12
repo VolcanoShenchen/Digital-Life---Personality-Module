@@ -111,6 +111,13 @@ def _migrate_legacy(data: Mapping[str, Any]) -> dict[str, Any]:
 
 
 @dataclass(frozen=True)
+class PersonaAuthority:
+    mode: str = "overlay"
+    suppress_generic_assistant_identity: bool = True
+    allow_technical_identity_disclosure: bool = True
+
+
+@dataclass(frozen=True)
 class Character:
     """Legacy compatibility view of the original character fields."""
 
@@ -312,6 +319,7 @@ class Settings:
     persona_source: str
     allowed_sessions: frozenset[str]
     allowed_bot_ids: frozenset[str]
+    persona_authority: PersonaAuthority
     character: Character
     relationship: Relationship
     expression: Expression
@@ -353,6 +361,18 @@ class Settings:
         source = _choice(data, "persona_source", ("plugin", "astrbot"))
         sessions = _id_list(data, "allowed_sessions")
         bot_ids = _id_list(data, "allowed_bot_ids")
+        authority_data = _object(data, "persona_authority")
+        authority = PersonaAuthority(
+            mode=_choice(
+                authority_data, "mode", ("overlay", "character_owner"), "persona_authority."
+            ),
+            suppress_generic_assistant_identity=_boolean(
+                authority_data, "suppress_generic_assistant_identity", True, "persona_authority."
+            ),
+            allow_technical_identity_disclosure=_boolean(
+                authority_data, "allow_technical_identity_disclosure", True, "persona_authority."
+            ),
+        )
 
         profile_data = _object(data, "profile")
         profile = Profile(
@@ -545,6 +565,9 @@ class Settings:
             boundaries=_text(character_data, "boundaries", "character."),
         )
 
+        if authority.mode == "character_owner" and source == "astrbot":
+            raise ConfigError("persona_authority.mode", "requires_plugin_persona")
+
         if enabled and source == "plugin":
             if "character" in original:
                 for field in ("name", "identity", "personality"):
@@ -603,6 +626,7 @@ class Settings:
             persona_source=source,
             allowed_sessions=sessions,
             allowed_bot_ids=bot_ids,
+            persona_authority=authority,
             character=character,
             relationship=relationship,
             expression=expression,

@@ -16,7 +16,7 @@ from .personality import (
 )
 from .settings import ConfigError, Settings
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 DIAGNOSTIC_CAPACITY = 128
 
 

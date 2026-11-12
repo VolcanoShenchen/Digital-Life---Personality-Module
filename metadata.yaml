@@ -1,7 +1,7 @@
 name: astrbot_plugin_digital_life_personality
 display_name: General_purpose_personality_plugin
 desc: 单角色人格与表达配置，通过 AstrBot 普通私聊流程生效；指定会话及机器人作用域，专属关系独立绑定。
-version: 0.2.0
+version: 0.2.1
 author: VolcanoShenchen
 repo: https://github.com/VolcanoShenchen/Digital-Life---Personality-Module
 astrbot_version: "==4.29.4"

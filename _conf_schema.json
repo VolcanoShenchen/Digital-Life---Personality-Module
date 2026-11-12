@@ -24,6 +24,31 @@
     "default": [],
     "hint": "每项一个字符串。必须与允许会话同时匹配，用于隔离多个机器人。"
   },
+  "persona_authority": {
+    "type": "object",
+    "description": "人格身份控制",
+    "items": {
+      "mode": {
+        "type": "string",
+        "description": "人格控制模式",
+        "default": "overlay",
+        "options": ["overlay", "character_owner"],
+        "hint": "overlay 叠加表达规则；character_owner 由插件主控角色身份，AstrBot 只保留工具、安全和技术能力。主控模式要求人格来源为 plugin。"
+      },
+      "suppress_generic_assistant_identity": {
+        "type": "bool",
+        "description": "抑制通用助手自我介绍",
+        "default": true,
+        "hint": "主控模式下避免无缘无故自称 AI、聊天机器人或 AstrBot 助手。"
+      },
+      "allow_technical_identity_disclosure": {
+        "type": "bool",
+        "description": "允许明确技术问题披露运行环境",
+        "default": true,
+        "hint": "用户明确询问平台、模型或插件时，可以如实说明；不会改变日常角色身份。"
+      }
+    }
+  },
   "profile": {
     "type": "object",
     "description": "基础身份资料",

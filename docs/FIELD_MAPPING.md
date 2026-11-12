@@ -2,7 +2,19 @@
 
 本清单对应配置结构、Vue 配置页和提示词注入。新字段已可用，旧字段仍兼容。
 
-## 一、基础身份
+## 人格身份控制
+
+| 配置键 | 含义 | 状态 |
+| --- | --- | --- |
+| `persona_authority.mode` | `overlay` 叠加模式，或 `character_owner` 角色主控模式 | 已实现；旧配置默认 overlay |
+| `persona_authority.suppress_generic_assistant_identity` | 主控模式下抑制通用 AI/助手身份自我介绍 | 已实现 |
+| `persona_authority.allow_technical_identity_disclosure` | 用户明确询问平台、模型或插件时允许如实披露 | 已实现 |
+
+推荐使用 `character_owner` + `persona_source=plugin`。角色主控模式把角色身份放到独立的身份权威区块，并明确说明 AstrBot 是运行环境；工具、安全规则和技术能力仍由宿主保留。
+
+如果用户问“你是谁”，主控模式要求先以角色身份回答；如果用户明确问“你是不是 AstrBot”或“你是什么模型”，才说明技术身份，然后回到角色视角。`character_owner` 与 `persona_source=astrbot` 同时使用会被配置校验拒绝。
+
+
 
 | 配置键 | 含义 | 状态 |
 | --- | --- | --- |

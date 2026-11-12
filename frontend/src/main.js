@@ -8,6 +8,11 @@ const list = (value) => (Array.isArray(value) ? [...value] : []);
 const blankConfig = () => ({
   enabled: false,
   persona_source: "plugin",
+  persona_authority: {
+    mode: "overlay",
+    suppress_generic_assistant_identity: true,
+    allow_technical_identity_disclosure: true,
+  },
   allowed_sessions: [],
   allowed_bot_ids: [],
   profile: {
@@ -231,7 +236,7 @@ function renderField(config, group, field) {
 
 function useAppState() {
   const config = reactive(blankConfig());
-  const summary = reactive({ version: "—", valid: false, enabled: false, config_error: "" });
+  const summary = reactive({ version: "—", valid: false, enabled: false, authority_mode: "overlay", config_error: "" });
   const active = ref("profile");
   const busy = ref(false);
   const message = ref("");
@@ -346,6 +351,7 @@ function renderApp(state) {
       h("div", { class: `summary ${summary.valid ? "valid" : ""}` }, [
         h("b", summary.enabled ? "已启用" : "未启用"),
         h("span", `配置：${summary.valid ? "有效" : "未完成"}`),
+        h("span", `身份控制：${summary.authority_mode === "character_owner" ? "角色主控" : "叠加"}`),
         h("span", `版本：${summary.version}`),
         summary.config_error ? h("small", summary.config_error) : null,
       ]),
@@ -371,12 +377,22 @@ function renderApp(state) {
           h("h2", "基础作用域"),
           h("p", "先填写范围，再配置角色。不会自动猜测用户或机器人身份。"),
         ]),
-        h("select", {
-          value: config.persona_source,
-          onChange: (event) => { config.persona_source = event.target.value; },
-        }, [
-          h("option", { value: "plugin" }, "插件管理完整人格"),
-          h("option", { value: "astrbot" }, "沿用 AstrBot 人格，只调整表达"),
+        h("div", { class: "mode-selects" }, [
+          h("select", {
+            value: config.persona_source,
+            onChange: (event) => { config.persona_source = event.target.value; },
+          }, [
+            h("option", { value: "plugin" }, "插件管理完整人格"),
+            h("option", { value: "astrbot" }, "沿用 AstrBot 人格"),
+          ]),
+          h("select", {
+            value: config.persona_authority.mode,
+            disabled: config.persona_source !== "plugin",
+            onChange: (event) => { config.persona_authority.mode = event.target.value; },
+          }, [
+            h("option", { value: "overlay" }, "叠加模式（兼容）"),
+            h("option", { value: "character_owner" }, "角色主控模式（推荐）"),
+          ]),
         ]),
       ]),
       h("div", { class: "basic-grid" }, [
@@ -399,6 +415,26 @@ function renderApp(state) {
             onInput: (event) => { botsText.value = event.target.value; },
           }),
           h("small", "用于隔离同一适配器中的多个机器人。"),
+        ]),
+        h("label", { class: "check-row" }, [
+          h("input", {
+            type: "checkbox",
+            checked: config.persona_authority.suppress_generic_assistant_identity,
+            disabled: config.persona_source !== "plugin",
+            onChange: (event) => { config.persona_authority.suppress_generic_assistant_identity = event.target.checked; },
+          }),
+          h("span", "抑制通用助手自我介绍"),
+          h("small", "角色主控模式下，避免无缘无故自称 AI、聊天机器人或 AstrBot 助手。"),
+        ]),
+        h("label", { class: "check-row" }, [
+          h("input", {
+            type: "checkbox",
+            checked: config.persona_authority.allow_technical_identity_disclosure,
+            disabled: config.persona_source !== "plugin",
+            onChange: (event) => { config.persona_authority.allow_technical_identity_disclosure = event.target.checked; },
+          }),
+          h("span", "允许明确技术问题披露运行环境"),
+          h("small", "用户明确询问平台、模型或插件时，可以如实说明。"),
         ]),
       ]),
     ]),
