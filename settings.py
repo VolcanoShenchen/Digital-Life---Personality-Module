@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 TEXT_BUDGET = 12_000
@@ -118,6 +119,42 @@ class PersonaAuthority:
 
 
 @dataclass(frozen=True)
+class DynamicState:
+    enabled: bool = False
+    target_session: str = ""
+    target_bot_id: str = ""
+    activity: str = ""
+    location: str = ""
+    mood: str = ""
+    energy: str = ""
+    source: str = "manual"
+    updated_at: str = ""
+    expires_at: str = ""
+
+    @property
+    def has_content(self) -> bool:
+        return any((self.activity, self.location, self.mood, self.energy))
+
+    def is_active(self, now: datetime | None = None) -> bool:
+        if not self.enabled or not self.has_content or not self.expires_at:
+            return False
+        now = now or datetime.now(UTC)
+        starts = parse_state_time(self.updated_at, "dynamic_state.updated_at")
+        ends = parse_state_time(self.expires_at, "dynamic_state.expires_at")
+        return starts <= now < ends
+
+
+def parse_state_time(value: str, field: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ConfigError(field, "expected_iso_datetime") from error
+    if parsed.tzinfo is None:
+        raise ConfigError(field, "timezone_required")
+    return parsed.astimezone(UTC)
+
+
+@dataclass(frozen=True)
 class Character:
     """Legacy compatibility view of the original character fields."""
 
@@ -154,6 +191,7 @@ class Background:
     education_history: str = ""
     work_history: str = ""
     important_events: tuple[str, ...] = ()
+    life_context: str = ""
     current_situation: str = ""
     secrets: tuple[str, ...] = ()
     world_setting: str = ""
@@ -320,6 +358,7 @@ class Settings:
     allowed_sessions: frozenset[str]
     allowed_bot_ids: frozenset[str]
     persona_authority: PersonaAuthority
+    dynamic_state: DynamicState
     character: Character
     relationship: Relationship
     expression: Expression
@@ -374,6 +413,40 @@ class Settings:
             ),
         )
 
+        state_data = _object(data, "dynamic_state")
+        dynamic_state = DynamicState(
+            enabled=_boolean(state_data, "enabled", False, "dynamic_state."),
+            target_session=_text(state_data, "target_session", "dynamic_state."),
+            target_bot_id=_text(state_data, "target_bot_id", "dynamic_state."),
+            activity=_text(state_data, "activity", "dynamic_state."),
+            location=_text(state_data, "location", "dynamic_state."),
+            mood=_text(state_data, "mood", "dynamic_state."),
+            energy=_text(state_data, "energy", "dynamic_state."),
+            source=_choice(state_data, "source", ("manual", "confirmed_event"), "dynamic_state."),
+            updated_at=_text(state_data, "updated_at", "dynamic_state."),
+            expires_at=_text(state_data, "expires_at", "dynamic_state."),
+        )
+        # Validate supplied timestamps even for disabled drafts; do not silently
+        # retain malformed values which would crash status inspection later.
+        updated = (
+            parse_state_time(dynamic_state.updated_at, "dynamic_state.updated_at")
+            if dynamic_state.updated_at
+            else None
+        )
+        expires = (
+            parse_state_time(dynamic_state.expires_at, "dynamic_state.expires_at")
+            if dynamic_state.expires_at
+            else None
+        )
+        if updated and expires and expires <= updated:
+            raise ConfigError("dynamic_state.expires_at", "must_follow_updated_at")
+        if dynamic_state.enabled and dynamic_state.has_content:
+            if updated is None or expires is None:
+                raise ConfigError("dynamic_state", "timestamps_required")
+            if dynamic_state.target_session not in sessions:
+                raise ConfigError("dynamic_state.target_session", "target_not_allowed")
+            if dynamic_state.target_bot_id not in bot_ids:
+                raise ConfigError("dynamic_state.target_bot_id", "target_bot_not_allowed")
         profile_data = _object(data, "profile")
         profile = Profile(
             name=_text(profile_data, "name", "profile."),
@@ -402,6 +475,7 @@ class Settings:
             education_history=_text(background_data, "education_history", "background."),
             work_history=_text(background_data, "work_history", "background."),
             important_events=_text_list(background_data, "important_events", "background."),
+            life_context=_text(background_data, "life_context", "background."),
             current_situation=_text(background_data, "current_situation", "background."),
             secrets=_text_list(background_data, "secrets", "background."),
             world_setting=_text(background_data, "world_setting", "background."),
@@ -607,6 +681,7 @@ class Settings:
                 "relationship",
                 "expression",
                 "examples",
+                "dynamic_state",
             )
             for value in _string_values(original.get(key, {}))
         )
@@ -627,6 +702,7 @@ class Settings:
             allowed_sessions=sessions,
             allowed_bot_ids=bot_ids,
             persona_authority=authority,
+            dynamic_state=dynamic_state,
             character=character,
             relationship=relationship,
             expression=expression,

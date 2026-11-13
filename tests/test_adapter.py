@@ -6,6 +6,7 @@ import json
 import sys
 import types
 import unittest
+from datetime import UTC
 from unittest.mock import Mock, patch
 
 from tests.support import PACKAGE, ROOT, load_plugin_module, valid_config
@@ -191,7 +192,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(event.stopped)
         self.assertTrue(event.call_llm)
         self.assertEqual(len(event.sent), 1)
-        self.assertIn("人格模块 0.2.1", event.sent[0])
+        self.assertIn("人格模块 0.3.0", event.sent[0])
         for private_text in ("测试角色", event.unified_msg_origin, "20001"):
             self.assertNotIn(private_text, event.sent[0])
         self.assertEqual(plugin.personality_status.permission, "ADMIN")
@@ -221,7 +222,12 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("scope_adapter_error", event.sent[0])
 
     async def test_webui_reads_and_saves_configuration_without_model_calls(self):
-        plugin = self.plugin_type(object(), valid_config())
+        class StoredConfig(dict):
+            def save_config(self):
+                self.saved = True
+
+        config = StoredConfig(valid_config())
+        plugin = self.plugin_type(object(), config)
         loaded = await plugin.web_get_settings()
         self.assertEqual(loaded["config"]["character"]["name"], "测试角色")
         updated = valid_config()
@@ -246,6 +252,95 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         result = await plugin.web_save_settings()
         self.assertEqual(result["status_code"], 400)
         self.assertEqual(plugin.runtime.settings.character.name, "测试角色")
+
+    async def test_dynamic_part_is_temporary_and_replaced_on_retry_or_expiry(self):
+        from datetime import datetime, timedelta
+
+        class TextPart:
+            def __init__(self, *, text):
+                self.text = text
+                self._no_save = False
+
+            def mark_as_temp(self):
+                self._no_save = True
+                return self
+
+        module = types.ModuleType("astrbot.core.agent.message")
+        module.TextPart = TextPart
+        now = datetime.now(UTC)
+        config = valid_config(
+            dynamic_state={
+                "enabled": True,
+                "target_session": "qq-main:FriendMessage:10001",
+                "target_bot_id": "20001",
+                "activity": "ACTIVE_SENTINEL",
+                "updated_at": (now - timedelta(minutes=1)).isoformat(),
+                "expires_at": (now + timedelta(minutes=30)).isoformat(),
+            }
+        )
+        plugin = self.plugin_type(object(), config)
+        req = self.request()
+        foreign = req.extra_user_content_parts[0]
+        with patch.dict(sys.modules, {"astrbot.core.agent.message": module}):
+            await plugin.apply_personality(EventDouble(), req)
+            self.assertEqual(len(req.extra_user_content_parts), 2)
+            part = req.extra_user_content_parts[-1]
+            self.assertTrue(part._no_save)
+            self.assertIn("ACTIVE_SENTINEL", part.text)
+            self.assertNotIn("ACTIVE_SENTINEL", req.system_prompt)
+            await plugin.apply_personality(EventDouble(), req)
+            self.assertEqual(len(req.extra_user_content_parts), 2)
+            self.assertIs(req.extra_user_content_parts[0], foreign)
+            config["dynamic_state"]["expires_at"] = now.isoformat()
+            plugin.runtime = load_plugin_module("runtime").Runtime(config)
+            await plugin.apply_personality(EventDouble(), req)
+            self.assertEqual(len(req.extra_user_content_parts), 2)
+            self.assertNotIn("ACTIVE_SENTINEL", req.extra_user_content_parts[-1].text)
+            self.assertIn("不代表活动已经完成", req.extra_user_content_parts[-1].text)
+            # An excluded request must also drop any existing owned temp part.
+            await plugin.apply_personality(EventDouble(bot="other"), req)
+            self.assertEqual(req.extra_user_content_parts, [foreign])
+
+    async def test_state_injection_failure_leaves_original_request_unchanged(self):
+        from datetime import datetime, timedelta
+
+        now = datetime.now(UTC)
+        config = valid_config(
+            dynamic_state={
+                "enabled": True,
+                "target_session": "qq-main:FriendMessage:10001",
+                "target_bot_id": "20001",
+                "activity": "NOT_SAVED",
+                "updated_at": now.isoformat(),
+                "expires_at": (now + timedelta(minutes=30)).isoformat(),
+            }
+        )
+        plugin = self.plugin_type(object(), config)
+        req = self.request()
+        req.extra_user_content_parts = None
+        original = req.system_prompt
+        await plugin.apply_personality(EventDouble(), req)
+        self.assertEqual(req.system_prompt, original)
+        self.assertIsNone(req.extra_user_content_parts)
+
+    async def test_webui_save_failure_retains_previous_config_and_runtime(self):
+        class BrokenStore(dict):
+            def save_config(self):
+                raise OSError("PRIVATE_DISK_ERROR")
+
+        config = BrokenStore(valid_config())
+        plugin = self.plugin_type(object(), config)
+        previous = plugin.runtime
+
+        async def body(default=None):
+            return valid_config(enabled=False)
+
+        self.web_request.json = body
+        result = await plugin.web_save_settings()
+        self.assertEqual(result["status_code"], 500)
+        self.assertTrue(config["enabled"])
+        self.assertIs(plugin.runtime, previous)
+        self.assertNotIn("PRIVATE_DISK_ERROR", str(result))
 
     async def test_webui_requires_dashboard_authentication(self):
         plugin = self.plugin_type(object(), valid_config())

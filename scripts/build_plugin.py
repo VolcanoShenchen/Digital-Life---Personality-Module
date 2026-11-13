@@ -17,6 +17,7 @@ BASE_RELEASE_FILES = (
     "settings.py",
     "personality.py",
     "runtime.py",
+    "dynamic_state.py",
     "metadata.yaml",
     "_conf_schema.json",
     "requirements.txt",
@@ -31,6 +32,7 @@ BASE_RELEASE_FILES = (
     "docs/WEBUI.md",
     "docs/FIELD_MAPPING.md",
     "docs/IDENTITY_AUTHORITY.md",
+    "docs/DYNAMIC_STATE.md",
     "CONTRIBUTING.md",
 )
 

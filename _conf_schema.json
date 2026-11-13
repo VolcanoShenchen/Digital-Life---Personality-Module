@@ -49,6 +49,23 @@
       }
     }
   },
+  "dynamic_state": {
+    "type": "object",
+    "description": "当前状态（临时、有有效期）",
+    "hint": "仅在指定私聊和机器人中、有效期内提供；不会自动推断状态或续期。过期不等于活动完成。",
+    "items": {
+      "enabled": {"type": "bool", "description": "启用临时状态", "default": false},
+      "target_session": {"type": "string", "description": "绑定私聊会话 UMO", "default": "", "_special": "umo", "hint": "必须属于允许会话列表，不跨会话注入。"},
+      "target_bot_id": {"type": "string", "description": "绑定机器人 QQ 号", "default": "", "hint": "必须属于允许机器人列表，不跨账号注入。"},
+      "activity": {"type": "text", "description": "当前活动", "default": "", "hint": "已确认此刻在做什么，区别于长期项目。"},
+      "location": {"type": "string", "description": "当前位置", "default": "", "hint": "即时所在场景，不是常住地。"},
+      "mood": {"type": "string", "description": "当前情绪", "default": ""},
+      "energy": {"type": "string", "description": "当前精力", "default": ""},
+      "source": {"type": "string", "description": "信息来源", "default": "manual", "options": ["manual", "confirmed_event"], "hint": "manual 为人工填写；confirmed_event 需要人工确认已发生事件，不会自动识别。"},
+      "updated_at": {"type": "string", "description": "状态确认 / 生效时间", "default": "", "hint": "ISO 时间，必须带时区，例如 2026-11-12T16:00:00+08:00。"},
+      "expires_at": {"type": "string", "description": "状态失效时间", "default": "", "hint": "带时区的 ISO 时间；读取不会延长有效期，到期只停止注入。"}
+    }
+  },
   "profile": {
     "type": "object",
     "description": "基础身份资料",
@@ -64,7 +81,7 @@
       "nationality": {"type": "string", "description": "国籍或地区", "default": ""},
       "native_language": {"type": "string", "description": "母语", "default": ""},
       "timezone": {"type": "string", "description": "所在时区", "default": ""},
-      "location": {"type": "string", "description": "所在地", "default": ""},
+      "location": {"type": "string", "description": "常住地（非当前位置）", "default": "", "hint": "长期居住区域；即时位置请填写当前状态。"},
       "occupation": {"type": "string", "description": "职业", "default": ""},
       "education": {"type": "text", "description": "教育背景", "default": ""},
       "social_status": {"type": "text", "description": "社会身份", "default": ""}
@@ -80,7 +97,8 @@
       "education_history": {"type": "text", "description": "学习经历", "default": ""},
       "work_history": {"type": "text", "description": "工作经历", "default": ""},
       "important_events": {"type": "list", "description": "重要事件", "default": []},
-      "current_situation": {"type": "text", "description": "当前处境", "default": ""},
+      "current_situation": {"type": "text", "description": "旧版当前处境（保留待迁移，不注入）", "default": "", "hint": "保留旧资料供人工迁移，不再作为背景或当前活动注入。"},
+      "life_context": {"type": "text", "description": "近期生活背景 / 项目（非当前活动）", "default": "", "hint": "长期阶段或持续项目，不表示此刻正在进行；即时活动请填写当前状态。"},
       "secrets": {"type": "list", "description": "秘密", "default": []},
       "world_setting": {"type": "text", "description": "世界设定", "default": ""},
       "known_facts": {"type": "text", "description": "明确知道的内容", "default": ""},

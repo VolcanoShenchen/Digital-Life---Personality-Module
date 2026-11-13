@@ -9,6 +9,7 @@ from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star
 from astrbot.api.web import error_response, json_response, request
 
+from .dynamic_state import STATE_END, STATE_START
 from .personality import Scope
 from .runtime import VERSION, Runtime
 
@@ -63,7 +64,11 @@ class DigitalLifePersonality(Star):
             if self.runtime.settings
             else "overlay",
             "config_error": self.runtime.config_error,
-            "runtime_applies_on_reload": True,
+            "dynamic_state": self.runtime.dynamic_summary(),
+            "legacy_current_situation_ignored": bool(
+                self.runtime.settings and self.runtime.settings.background.current_situation
+            ),
+            "runtime_applies_on_reload": False,
         }
 
     async def web_get_settings(self):
@@ -88,11 +93,19 @@ class DigitalLifePersonality(Star):
             return error_response(
                 candidate_runtime.config_error or "invalid configuration", status_code=400
             )
-        self.config.clear()
-        self.config.update(candidate)
         saver = getattr(self.config, "save_config", None)
-        if callable(saver):
+        if not callable(saver):
+            return error_response("configuration storage unavailable", status_code=503)
+        previous = deepcopy(dict(self.config))
+        try:
+            self.config.clear()
+            self.config.update(candidate)
             saver()
+        except Exception:
+            self.config.clear()
+            self.config.update(previous)
+            logger.warning("[DigitalLifePersonality] config_save_failed")
+            return error_response("configuration could not be saved", status_code=500)
         self.runtime = candidate_runtime
         return json_response(
             {
@@ -102,15 +115,46 @@ class DigitalLifePersonality(Star):
             }
         )
 
+    def _temporary_state_parts(self, req: ProviderRequest, scope: Scope, reason: str):
+        parts = getattr(req, "extra_user_content_parts", None)
+        context = self.runtime.dynamic_context(scope) if reason == "applied" else ""
+        if not isinstance(parts, list):
+            if context:
+                raise ValueError("temporary_parts_unsupported")
+            return None
+
+        # Recognise only our full temporary TextPart. Preserve other plugins'
+        # parts (including plain dictionaries) and their object identities.
+        def owned(part):
+            text = getattr(part, "text", None)
+            return (
+                getattr(part, "_no_save", False)
+                and isinstance(text, str)
+                and text.startswith(STATE_START)
+                and text.endswith(STATE_END)
+            )
+
+        clean = [part for part in parts if not owned(part)]
+        if context:
+            from astrbot.core.agent.message import TextPart
+
+            clean.append(TextPart(text=context).mark_as_temp())
+        if len(clean) == len(parts) and all(a is b for a, b in zip(clean, parts, strict=True)):
+            return None
+        return clean
+
     @filter.on_llm_request()
     async def apply_personality(self, event: AstrMessageEvent, req: ProviderRequest):
         """Append stable character rules only to explicitly permitted private chats."""
         try:
             scope = event_scope(event)
             outcome = self.runtime.apply(req.system_prompt, scope)
-            # Runtime returns a fully built value. No partially rewritten request.
+            # Build both changes before mutating either request field.
+            state_parts = self._temporary_state_parts(req, scope, outcome.reason)
             if isinstance(outcome.prompt, str):
                 req.system_prompt = outcome.prompt
+            if state_parts is not None:
+                req.extra_user_content_parts[:] = state_parts
             if outcome.reason in ("malformed_owned_block", "unsupported_system_prompt"):
                 if self._last_error != outcome.reason:
                     logger.warning(f"[DigitalLifePersonality] {outcome.reason}")

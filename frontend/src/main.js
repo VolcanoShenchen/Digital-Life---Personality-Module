@@ -1,4 +1,4 @@
-import { createApp, reactive, ref, computed, onMounted, h } from "vue";
+import { createApp, reactive, ref, computed, onMounted, onUnmounted, h } from "vue";
 import "./style.css";
 
 const bridge = window.AstrBotPluginView;
@@ -15,6 +15,11 @@ const blankConfig = () => ({
   },
   allowed_sessions: [],
   allowed_bot_ids: [],
+  dynamic_state: {
+    enabled: false, target_session: "", target_bot_id: "",
+    activity: "", location: "", mood: "", energy: "", source: "manual",
+    updated_at: "", expires_at: "",
+  },
   profile: {
     name: "", nickname: "", gender_identity: "", pronouns: "", age: "", age_mode: "fixed",
     birth_date: "", species: "", nationality: "", native_language: "", timezone: "",
@@ -22,7 +27,7 @@ const blankConfig = () => ({
   },
   background: {
     identity: "", family: "", childhood: "", education_history: "", work_history: "",
-    important_events: [], current_situation: "", secrets: [], world_setting: "",
+    important_events: [], current_situation: "", life_context: "", secrets: [], world_setting: "",
     known_facts: "", unknown_facts: "",
   },
   personality: {
@@ -80,14 +85,15 @@ function mergeDeep(target, source) {
 }
 
 const labels = {
-  profile: "基础资料", background: "经历与世界", personality: "性格核心", behavior: "情境行为",
+  profile: "基础资料", dynamic_state: "当前状态", background: "经历与世界", personality: "性格核心", behavior: "情境行为",
   relationship: "专属关系", speech: "说话方式", response: "回复策略", roleplay: "动作与场景",
   boundaries: "边界保护",
 };
 
 const descriptions = {
   profile: "稳定的身份事实。这里填写“她是谁”。",
-  background: "成长经历、当前处境和世界知识。未知内容不自动编造。",
+  background: "成长经历、近期长期背景和世界知识，不表示此刻正在发生。",
+  dynamic_state: "带来源、作用域和有效期的临时信息。过期只代表不再注入，不自动证明活动已完成。",
   personality: "性格倾向、价值观、缺点和内在矛盾。",
   behavior: "遇到具体情绪和互动时，她会怎么反应。",
   relationship: "只对绑定的私聊会话和机器人生效。",
@@ -98,6 +104,7 @@ const descriptions = {
 };
 
 const options = {
+  source: [["manual", "人工填写"], ["confirmed_event", "已确认事件（需人工确认）"]],
   age_mode: [["fixed", "固定年龄"], ["growing", "随时间增长"], ["timeline", "角色时间线"]],
   changeability: [["stable", "稳定"], ["influenced", "容易受影响"], ["adaptive", "随关系变化"]],
   social_temperature: [["slow", "慢热"], ["moderate", "适中"], ["outgoing", "外向"]],
@@ -115,13 +122,25 @@ const options = {
 };
 
 const fieldGroups = {
+  dynamic_state: [
+    ["enabled", "启用临时状态", "checkbox", "仅在所绑定的私聊和机器人中、有效时间内提供状态。"],
+    ["target_session", "绑定私聊会话 UMO", "scope", "从允许列表选择或手工填写完整 UMO。"],
+    ["target_bot_id", "绑定机器人 QQ 号", "scope", "必须属于允许的机器人列表，不跨账号继承。"],
+    ["activity", "当前活动", "textarea", "已经确认此刻在做什么；不要填写长期项目。"],
+    ["location", "当前位置", "text", "此刻所在场景，与常住地区分。"],
+    ["mood", "当前情绪", "text", "已确认的临时情绪，不是性格倾向。"],
+    ["energy", "当前精力", "text", "人工填写或确认的精力描述。"],
+    ["source", "信息来源", "select", "“已确认事件”须由你人工确认，不会自动识别事件或推断情绪。"],
+    ["updated_at", "状态确认 / 生效时间", "datetime", "以浏览器时区输入，保存为带时区的 ISO 时间。"],
+    ["expires_at", "状态失效时间", "datetime", "读取状态不会续期；到期只停止注入，不表示活动完成。"],
+  ],
   profile: [
     ["name", "姓名", "text", "角色的正式姓名或主要称呼。"], ["nickname", "昵称", "text", "常用昵称或自称。"],
     ["gender_identity", "性别认同", "text", "例如女性、男性、非二元或自定义。"], ["pronouns", "代称", "text", "角色希望如何被指代。"],
     ["age", "年龄", "text", "可以填写数字或文字年龄。"], ["age_mode", "年龄模式", "select", "年龄是固定、增长还是按角色时间线计算。"],
     ["birth_date", "出生日期", "text", "需要计算年龄时填写。"], ["species", "物种", "text", "例如人类、仿生人、精灵。"],
     ["nationality", "国籍或地区", "text", "角色的地域背景。"], ["native_language", "母语", "text", "语言背景。"],
-    ["timezone", "所在时区", "text", "例如 Asia/Shanghai。"], ["location", "所在地", "text", "常住地或当前生活地点。"],
+    ["timezone", "所在时区", "text", "例如 Asia/Shanghai。"], ["location", "常住地（非当前位置）", "text", "长期居住区域，不能作为当前所在位置。"],
     ["occupation", "职业", "text", "职业、身份或主要活动。"], ["education", "教育背景", "textarea", "专业、学校或知识背景。"],
     ["social_status", "社会身份", "textarea", "家庭、社会身份或经济状况。"],
   ],
@@ -129,7 +148,9 @@ const fieldGroups = {
     ["identity", "身份与背景", "textarea", "角色是谁、身处什么背景。启用 plugin 模式时必填。"], ["family", "家庭关系", "textarea", "家庭结构与相处方式。"],
     ["childhood", "童年经历", "textarea", "塑造角色的重要成长经历。"], ["education_history", "学习经历", "textarea", "教育经历。"],
     ["work_history", "工作经历", "textarea", "工作经历。"], ["important_events", "重要事件", "list", "每行一项。"],
-    ["current_situation", "当前处境", "textarea", "角色现在的生活状态。"], ["secrets", "秘密", "list", "角色不会随意主动透露的内容。"],
+    ["current_situation", "旧版当前处境（保留待迁移，不注入）", "textarea", "保留旧内容供人工迁移；不会作为长期背景或当前活动提供给模型。"],
+    ["life_context", "近期生活背景 / 项目（非当前活动）", "textarea", "描述持续的生活阶段或项目；此刻活动请填写“当前状态”。"],
+    ["secrets", "秘密", "list", "角色不会随意主动透露的内容。"],
     ["world_setting", "世界设定", "textarea", "世界基本规则、科技或魔法背景。"], ["known_facts", "明确知道", "textarea", "角色知道的范围。"],
     ["unknown_facts", "明确不知道", "textarea", "角色不应该假装知道的范围。"],
   ],
@@ -191,6 +212,50 @@ function fieldModel(config, group, key) {
   });
 }
 
+function toLocalDateTime(value) {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return "";
+  const local = new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 19);
+}
+
+function fromLocalDateTime(value) {
+  if (!value) return "";
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : "";
+}
+
+function stateSummary(saved, now) {
+  if (!saved) return { title: "等待读取", detail: "保存后由服务端校验状态；页面时钟不会延长有效期。", active: false };
+  const reasonLabels = {
+    disabled: "临时状态未启用", empty: "尚未填写状态内容", no_content: "尚未填写状态内容",
+    expired: "状态已过期", not_started: "尚未到生效时间", active: "状态有效", valid: "状态有效",
+    invalid_config: "状态配置无效", invalid_time: "时间配置无效", plugin_disabled: "插件未启用",
+  };
+  const start = Date.parse(saved.updated_at || "");
+  const end = Date.parse(saved.expires_at || "");
+  let reason = saved.reason || "unknown";
+  let active = Boolean(saved.active);
+  if (["plugin_disabled", "invalid_config"].includes(reason)) { active = false; }
+  else if (!saved.enabled) { reason = "disabled"; active = false; }
+  else if (!saved.has_content) { reason = "no_content"; active = false; }
+  else if (Number.isFinite(end) && now >= end) { reason = "expired"; active = false; }
+  else if (Number.isFinite(start) && now < start) { reason = "not_started"; active = false; }
+  else if (Number.isFinite(start) && Number.isFinite(end) && ["active", "valid", "not_started"].includes(reason)) {
+    reason = "active"; active = true;
+  }
+  const seconds = Number.isFinite(end) ? Math.max(0, Math.ceil((end - now) / 1000)) : null;
+  const duration = seconds === null ? "" : `${Math.floor(seconds / 3600)}小时 ${Math.floor((seconds % 3600) / 60)}分 ${seconds % 60}秒`;
+  return {
+    title: reasonLabels[reason] || reason,
+    detail: reason === "expired" ? "有效期已结束，不再作为当前事实注入；不能据此认定活动已完成。"
+      : active && duration ? `剩余 ${duration}（按已保存截止时间计算）`
+      : "当前为已保存状态的判定；表单修改只有保存成功后生效。",
+    active,
+  };
+}
+
 function renderField(config, group, field) {
   const [key, label, type, hint] = field;
   const model = fieldModel(config, group, key);
@@ -203,6 +268,31 @@ function renderField(config, group, field) {
       }),
       h("span", label),
       h("small", hint),
+    ]);
+  }
+  if (type === "scope") {
+    const identifiers = key === "target_session" ? config.allowed_sessions : config.allowed_bot_ids;
+    const listId = `dynamic-state-${key}-options`;
+    return h("label", { class: "field wide", key }, [
+      h("span", label),
+      h("input", {
+        id: `dynamic-state-${key}`, type: "text", list: listId, value: model.value || "",
+        onInput: (event) => { model.value = event.target.value; },
+      }),
+      h("datalist", { id: listId }, (identifiers || []).map((value) => h("option", { value }))),
+      h("small", hint),
+    ]);
+  }
+  if (type === "datetime") {
+    return h("label", { class: "field", key }, [
+      h("span", label),
+      h("input", {
+        id: `dynamic-state-${key}`, type: "datetime-local", step: 1,
+        value: toLocalDateTime(model.value),
+        onChange: (event) => { model.value = fromLocalDateTime(event.target.value); },
+      }),
+      h("small", hint),
+      model.value ? h("small", { class: "iso-time" }, `保存值：${model.value}`) : null,
     ]);
   }
   const control =
@@ -242,6 +332,17 @@ function useAppState() {
   const message = ref("");
   const messageKind = ref("ok");
   const sections = Object.keys(fieldGroups);
+  const clock = ref(Date.now());
+  const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "浏览器本地时区";
+  const dynamicStatus = computed(() => stateSummary(summary.dynamic_state, clock.value));
+  let clockTimer;
+  function setValidity(minutes) {
+    const now = new Date();
+    config.dynamic_state.updated_at = now.toISOString();
+    config.dynamic_state.expires_at = new Date(now.getTime() + minutes * 60_000).toISOString();
+    message.value = `已设置 ${minutes} 分钟有效期；保存后生效，未自动开启状态。`;
+    messageKind.value = "ok";
+  }
 
   const sessionsText = computed({
     get: () => (config.allowed_sessions || []).join("\n"),
@@ -319,11 +420,16 @@ function useAppState() {
     }
   }
 
-  onMounted(load);
+  onMounted(() => {
+    load();
+    clockTimer = setInterval(() => { clock.value = Date.now(); }, 1000);
+  });
+  onUnmounted(() => { clearInterval(clockTimer); });
 
   return {
     config, summary, active, busy, message, messageKind, sections,
     sessionsText, botsText, relationFilled, save,
+    dynamicStatus, browserTimezone, setValidity,
   };
 }
 
@@ -340,6 +446,7 @@ function renderApp(state) {
   const {
     config, summary, active, busy, message, messageKind, sections,
     sessionsText, botsText, relationFilled, save,
+    dynamicStatus, browserTimezone, setValidity,
   } = state;
   return h("div", { class: "app-shell" }, [
     h("header", { class: "hero" }, [
@@ -475,7 +582,27 @@ function renderApp(state) {
                 ]),
                 h("span", { class: "count" }, `${fieldGroups[active.value].length} 个字段`),
               ]),
+              active.value === "dynamic_state" ? h("div", { class: "dynamic-state-overview" }, [
+                h("div", {
+                  class: `dynamic-state-status ${dynamicStatus.value.active ? "is-active" : ""}`,
+                  role: "status", "aria-live": "polite",
+                }, [
+                  h("small", "已保存状态 · 实时有效期"),
+                  h("strong", { id: "dynamic-state-status" }, dynamicStatus.value.title),
+                  h("p", dynamicStatus.value.detail),
+                ]),
+                h("p", { class: "timezone-note" }, `时间输入使用浏览器时区：${browserTimezone}；保存为带时区的 ISO 时间，服务端按实际时刻校验。`),
+                h("div", { class: "validity-actions" }, [
+                  h("span", "从现在开始："),
+                  ...[30, 60, 120].map((minutes) => h("button", {
+                    type: "button", "data-validity-minutes": minutes,
+                    disabled: busy.value, onClick: () => setValidity(minutes),
+                  }, `${minutes} 分钟`)),
+                ]),
+                h("p", { class: "timezone-note" }, "快捷设置会同时更新生效与失效时间，保存后生效；页面读取、刷新和倒计时不会自动续期。"),
+              ]) : null,
               h("div", { class: "field-grid" }, fieldGroups[active.value].map((field) => renderField(config, active.value, field))),
+              active.value === "dynamic_state" ? h("div", { class: "tip" }, "当前状态必须绑定允许的私聊会话和机器人。来源“已确认事件”需要你人工确认，不自动判断；过期只停止注入，不代表活动完成。") : null,
               active.value === "relationship" && !relationFilled.value
                 ? h("div", { class: "tip" }, "关系字段全部留空时，不会预设任何亲密关系。")
                 : null,

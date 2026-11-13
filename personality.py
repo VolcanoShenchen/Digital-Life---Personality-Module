@@ -209,7 +209,7 @@ def build_persona(settings: Settings) -> str:
             ("国籍或地区", profile.nationality),
             ("母语", profile.native_language),
             ("时区", profile.timezone),
-            ("所在地", profile.location),
+            ("常住地（不证明当前位置）", profile.location),
             ("职业", profile.occupation),
             ("教育背景", profile.education),
             ("社会身份", profile.social_status),
@@ -218,11 +218,15 @@ def build_persona(settings: Settings) -> str:
                 identity_facts.append(f"{label}：{value}")
         _text_section(parts, "基础身份资料", "\n".join(identity_facts))
         _text_section(parts, "身份与世界背景", background.identity)
-        _text_section(parts, "当前生活处境", background.current_situation)
-        _text_section(parts, "家庭与成长经历", background.family or background.childhood)
-        _text_section(
-            parts, "教育与工作经历", background.education_history or background.work_history
+        _text_section(parts, "近期生活背景（不是此刻正在做的事）", background.life_context)
+        parts.append(
+            "近期生活背景只说明一段时间的处境或项目，不证明此刻正在进行。"
+            "询问当前活动时优先使用本轮未过期状态；没有状态时不要重复背景或编造新活动。"
         )
+        _text_section(parts, "家庭关系", background.family)
+        _text_section(parts, "童年经历", background.childhood)
+        _text_section(parts, "学习经历", background.education_history)
+        _text_section(parts, "工作经历", background.work_history)
         _list_section(parts, "重要经历", background.important_events)
         _text_section(parts, "世界设定", background.world_setting)
         _text_section(parts, "角色明确知道的内容", background.known_facts)

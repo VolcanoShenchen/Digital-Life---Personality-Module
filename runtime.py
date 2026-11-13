@@ -6,6 +6,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from .dynamic_state import build_state_context, state_summary
 from .personality import (
     PromptError,
     Scope,
@@ -16,7 +17,7 @@ from .personality import (
 )
 from .settings import ConfigError, Settings
 
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 DIAGNOSTIC_CAPACITY = 128
 
 
@@ -74,6 +75,12 @@ class Runtime:
         self.record(scope, reason)
         return Outcome(updated, reason)
 
+    def dynamic_context(self, scope: Scope) -> str:
+        return build_state_context(self.settings, scope)
+
+    def dynamic_summary(self) -> dict:
+        return state_summary(self.settings)
+
     def status(self, scope: Scope) -> str:
         settings = self.settings
         source = settings.persona_source if settings else "不可用"
@@ -89,6 +96,11 @@ class Runtime:
             f"当前会话判定：{current}",
             f"最近请求结果：{previous}",
         ]
+        state = settings.dynamic_state if settings else None
+        if state and state.target_session == scope.origin and state.target_bot_id == scope.bot_id:
+            lines.append(f"当前状态有效性：{self.dynamic_summary()['reason']}")
+        else:
+            lines.append("当前状态有效性：本会话未绑定")
         if self.config_error:
             lines.append(f"配置字段错误：{self.config_error}")
         if source == "astrbot":

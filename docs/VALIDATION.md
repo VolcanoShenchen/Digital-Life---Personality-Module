@@ -2,56 +2,31 @@
 
 ## 版本与范围
 
-- 插件版本：0.2.1，内部测试预览。
-- 实现分支：feature/personality-v0.1。
+- 插件版本：0.3.0，动态状态内部测试预览。
+- 实现分支：feature/dynamic-state-v0.3。
 - 官方参考：AstrBot v4.29.4，固定提交 `61335414433db721b3f7ecc93f90deafe0a59d78`。
-- 单元测试解释器：Python 3.12.14；E 盘宿主测试使用独立 Python 3.12.10。
-- 本地宿主：官方 PyPI AstrBot 4.29.4，NapCat 4.18.42 便携 Node 包，Windows AMD64。
+- Python：3.12+；本地宿主使用 E 盘独立 Python 3.12.10。
 - 前端：Vue 3.5 + Vite 6，构建为 AstrBot `views/settings`。
-- 静态工具：Ruff 0.14.10。
 
-## 官方源码核对
+## 测试结果
 
-以下为静态接口核对，不是完整 AstrBot 实例中的运行测试：
+- 90 项动态状态、结构化人格、WebUI、适配和安装包测试已通过；版本号更新后将复跑最终套件。
+- 动态状态单元测试覆盖：空/坏时间、带时区时间、未来未开始、有效、过期、插件关闭、目标会话/机器人隔离、状态文本不进入稳定人格、过期不声称完成、状态临时块和配置保存失败回滚。
+- 旧 `background.current_situation` 保留但不进入 `build_persona()`；`background.life_context` 作为长期背景注入并明确不是当前活动。
+- 枚举与稳定行为规则继续进入稳定人格；当前活动、位置、情绪和精力只在有效时间作为临时用户内容块注入。
+- AstrBot 4.29.4 的 `TextPart.mark_as_temp()` 路径用于避免动态状态进入持久对话历史。
 
-- [Python 约束](https://github.com/AstrBotDevs/AstrBot/blob/61335414433db721b3f7ecc93f90deafe0a59d78/pyproject.toml)：要求 Python >=3.12。
-- [Star 基类](https://github.com/AstrBotDevs/AstrBot/blob/61335414433db721b3f7ecc93f90deafe0a59d78/astrbot/core/star/base.py)：配置构造签名与子类注册。
-- [消息事件](https://github.com/AstrBotDevs/AstrBot/blob/61335414433db721b3f7ecc93f90deafe0a59d78/astrbot/core/platform/astr_message_event.py)：平台、机器人、私聊、管理员、停止事件及默认 LLM 禁用接口。
-- [会话标识](https://github.com/AstrBotDevs/AstrBot/blob/61335414433db721b3f7ecc93f90deafe0a59d78/astrbot/core/platform/message_session.py)：UMO 不包含机器人 self_id，需额外约束。
-- [请求结构](https://github.com/AstrBotDevs/AstrBot/blob/61335414433db721b3f7ecc93f90deafe0a59d78/astrbot/core/provider/entities.py)：只修改 system_prompt，保留其他请求字段。
-- [插件可视化视图](https://docs.astrbot.app/dev/star/guides/plugin-pages.html)：`views/<name>/index.html` 与 `context.register_web_api()`。
+## 本地宿主
 
-## 本地检查
+- 本地 AstrBot 4.29.4 启动和插件加载已通过。
+- 动态配置 WebUI 已加入“当前状态”分组：绑定会话/机器人、状态字段、来源、浏览器时区时间和 30/60/120 分钟快捷设置。
+- 状态卡片按保存的截止时间实时倒计时，不会读取页面时自动续期。
+- 本地人设 `林晚` 目前可以继续作为目标私聊测试数据；动态状态默认是否开启由配置文件决定。
 
-使用合成配置和 API 替身，不连接 QQ、不调用模型。
+## 本轮不包含
 
-| 检查 | 结果 |
-| --- | --- |
-| unittest | 72 项通过：旧配置兼容、适配与 Schema、结构化提示、身份主控、WebUI、区块结构和安装包 |
-| Ruff 静态检查与格式检查 | 通过；开发依赖固定为 0.14.10 |
-| Vue 页面构建 | 通过；生成相对路径的哈希 JS/CSS 资源 |
-| 完整 ZIP 构建与校验 | 通过显式清单、版本、默认值、CRC、相对资源路径和未构建前端检查 |
-| 身份主控测试 | 通过；角色主控、技术身份披露、叠加兼容和模式冲突均有回归测试 |
+- 插件专用消息分段和连续气泡编排。
+- 自动生活模拟、自动情绪识别、自动日程推断和长期记忆学习。
+- 发送失败后的余段取消、送达确认驱动的历史写入等高级发送契约。
 
-## E 盘本地宿主验证
-
-使用独立目录 E:\LinXiaozhi\Memory\local-test，未改动云端环境。
-
-- AstrBot 4.29.4 从 E 盘工作目录启动，管理页面 http://127.0.0.1:6185/ 返回 HTTP 200；OneBot 6199 仅监听 127.0.0.1。
-- 0.2.1 插件已加载，运行时报告版本 0.2.1；配置有效且启用。
-- 当前本地配置为 `persona_source=plugin` + `persona_authority=character_owner`。
-- 真实本地事件对象验证：目标私聊注入包含身份主控合同的提示；其他用户和其他机器人均被排除。
-- 角色主控提示包含 `<identity_authority>`、`<host_compatibility>` 和 `<final_character_check>`，明确角色优先、宿主能力保留及技术问题披露规则。
-- 人设林晚已导入并通过作用域验证：`local-napcat:FriendMessage:1046499622` + 机器人 `2142105127`，判定结果 `applied`。
-- Vue 页面通过真实浏览器渲染，10 个分组导航均可点击切换；控制台无页面脚本异常。
-- NapCat 4.18.42 官方便携包通过完整长度和 SHA-256，Node 22.11.0 预检通过；QQ 已登录，但真实模型和 OneBot 私聊效果仍需观察。
-
-## 尚未验证
-
-- 用户云端的 AstrBot、Python、Agent 和模型组合。
-- 真实模型对“你是谁”“你是不是 AstrBot”“你是什么模型”等身份场景的回复质量。
-- QQ 实际消息收发、工具循环、图片/音频和流式端到端行为。
-- 其他后执行的人设重写插件与本插件的冲突行为。
-- 其他 AstrBot 版本和第三方 Agent 路径。
-
-这些项目不因核心、替身或本地宿主测试通过而转为全环境验收通过。
+这些功能仍按 [动静态与发送方案](STATE_AND_DELIVERY_PLAN.md) 留待后续模块。
