@@ -20,6 +20,16 @@ h1 { margin: 0; font-size: 34px; letter-spacing: -.04em; }
 .flash { margin-bottom: 16px; padding: 12px 14px; border-radius: 10px; background: #172554; color: #bfdbfe; }
 .flash.error { background: #450a0a; color: #fecaca; }
 .scope-card { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 14px; padding: 16px 20px; border: 1px solid #334155; border-radius: 14px; background: rgba(15,23,42,.65); }
+.state-legend { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0 0 14px; }
+.legend-item { display: grid; gap: 5px; padding: 13px 16px; border: 1px solid #334155; border-left-width: 4px; border-radius: 10px; background: rgba(15,23,42,.72); }
+.legend-item b { font-size: 14px; }
+.legend-item span { color: #94a3b8; font-size: 12px; line-height: 1.55; }
+.legend-item.stable { border-left-color: #64748b; }
+.legend-item.stable b { color: #cbd5e1; }
+.legend-item.dynamic { border-left-color: #22c55e; background: rgba(20,83,45,.2); }
+.legend-item.dynamic b { color: #86efac; }
+.tabs button.dynamic-tab { border-left: 3px solid #22c55e; }
+.tabs button.dynamic-tab.active { background: #15803d; border-color: #22c55e; }
 .scope-card div { display: grid; gap: 5px; }
 .scope-card small { color: #94a3b8; }
 .switch { display: flex; align-items: center; gap: 8px; color: #bfdbfe; white-space: nowrap; }

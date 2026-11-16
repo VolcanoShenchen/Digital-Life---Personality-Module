@@ -478,6 +478,16 @@ function renderApp(state) {
         h("span", "启用"),
       ]),
     ]),
+    h("div", { class: "state-legend" }, [
+      h("div", { class: "legend-item stable" }, [
+        h("b", "稳定设定"),
+        h("span", "身份、经历、性格、说话方式和边界；不会因一轮聊天自动改变。"),
+      ]),
+      h("div", { class: "legend-item dynamic" }, [
+        h("b", "临时状态"),
+        h("span", "当前活动、位置、情绪和精力；绑定会话并按有效期注入。"),
+      ]),
+    ]),
     h("section", { class: "panel basics" }, [
       h("div", { class: "panel-title" }, [
         h("div", [
@@ -549,7 +559,7 @@ function renderApp(state) {
       h("nav", { class: "tabs" }, [
         ...sections.map((key) =>
           h("button", {
-            class: active.value === key ? "active" : "",
+            class: `${active.value === key ? "active" : ""} ${key === "dynamic_state" ? "dynamic-tab" : ""}`,
             onClick: () => { active.value = key; },
           }, labels[key])),
         h("button", {
