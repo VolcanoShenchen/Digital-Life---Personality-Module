@@ -359,6 +359,7 @@ class Settings:
     allowed_bot_ids: frozenset[str]
     persona_authority: PersonaAuthority
     dynamic_state: DynamicState
+    schedule: Any
     character: Character
     relationship: Relationship
     expression: Expression
@@ -447,6 +448,9 @@ class Settings:
                 raise ConfigError("dynamic_state.target_session", "target_not_allowed")
             if dynamic_state.target_bot_id not in bot_ids:
                 raise ConfigError("dynamic_state.target_bot_id", "target_bot_not_allowed")
+        from .schedule import parse_schedule_config
+
+        schedule_config = parse_schedule_config(dict(data))
         profile_data = _object(data, "profile")
         profile = Profile(
             name=_text(profile_data, "name", "profile."),
@@ -682,6 +686,7 @@ class Settings:
                 "expression",
                 "examples",
                 "dynamic_state",
+                "schedule",
             )
             for value in _string_values(original.get(key, {}))
         )
@@ -703,6 +708,7 @@ class Settings:
             allowed_bot_ids=bot_ids,
             persona_authority=authority,
             dynamic_state=dynamic_state,
+            schedule=schedule_config,
             character=character,
             relationship=relationship,
             expression=expression,

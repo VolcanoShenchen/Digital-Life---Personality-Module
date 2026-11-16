@@ -15,9 +15,10 @@ from .personality import (
     scope_reason,
     strip_owned_blocks,
 )
+from .schedule import ScheduleError, ScheduleStore, build_schedule_context, owner_identity
 from .settings import ConfigError, Settings
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 DIAGNOSTIC_CAPACITY = 128
 
 
@@ -30,7 +31,9 @@ class Outcome:
 class Runtime:
     """One immutable configuration snapshot per plugin load; no model calls."""
 
-    def __init__(self, config: Mapping[str, Any]):
+    def __init__(self, config: Mapping[str, Any], schedule_store: ScheduleStore | None = None):
+        self.schedule_store = schedule_store
+        self.schedule_error = ""
         self.settings: Settings | None = None
         self.config_error = ""
         self._persona = ""
@@ -80,6 +83,58 @@ class Runtime:
 
     def dynamic_summary(self) -> dict:
         return state_summary(self.settings)
+
+    def schedule_available(self) -> bool:
+        return bool(
+            self.schedule_store
+            and self.settings
+            and self.settings.enabled
+            and self.settings.schedule.enabled
+        )
+
+    def schedule_context(self, scope: Scope) -> str:
+        if not self.schedule_available():
+            return ""
+        try:
+            context = build_schedule_context(self.settings, scope, self.schedule_store)
+            self.schedule_error = ""
+            return context
+        except (ScheduleError, OSError):
+            self.schedule_error = "schedule_unavailable"
+            return ""
+
+    def schedule_today(self) -> dict | None:
+        if not self.schedule_available():
+            return None
+        try:
+            result = self.schedule_store.get_or_generate(
+                self.settings.schedule, owner=owner_identity(self.settings)
+            )
+            self.schedule_error = ""
+            return result
+        except (ScheduleError, OSError):
+            self.schedule_error = "schedule_unavailable"
+            return None
+
+    def schedule_current(self) -> dict | None:
+        if not self.schedule_available():
+            return None
+        try:
+            current = self.schedule_store.current_slot(
+                self.settings.schedule, owner=owner_identity(self.settings)
+            )
+            self.schedule_error = ""
+            return current
+        except (ScheduleError, OSError):
+            self.schedule_error = "schedule_unavailable"
+            return None
+
+    def schedule_status(self) -> dict:
+        if not self.schedule_available():
+            return {"enabled": False, "reason": "disabled"}
+        if self.schedule_error:
+            return {"enabled": True, "reason": self.schedule_error}
+        return {"enabled": True, "reason": "enabled"}
 
     def status(self, scope: Scope) -> str:
         settings = self.settings

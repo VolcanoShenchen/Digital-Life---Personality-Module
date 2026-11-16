@@ -5,6 +5,38 @@ const bridge = window.AstrBotPluginView;
 
 const list = (value) => (Array.isArray(value) ? [...value] : []);
 
+function unwrapResponse(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("服务端返回了无效响应");
+  }
+  if (value.status === "error") throw new Error(value.message || "请求失败");
+  const result = value.status === "ok" && Object.hasOwn(value, "data") ? value.data : value;
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw new Error("服务端返回了无效数据");
+  }
+  return result;
+}
+
+function zonedClock(now, timezone) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    }).formatToParts(new Date(now));
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return { date: `${values.year}-${values.month}-${values.day}`, time: `${values.hour}:${values.minute}` };
+  } catch { return null; }
+}
+
+function currentSchedule(today, timezone, now) {
+  const local = zonedClock(now, today?.timezone || timezone);
+  if (!local) return { reason: "invalid_timezone", slot: null, date: "", time: "" };
+  if (!today || !Array.isArray(today.slots)) return { ...local, reason: "no_schedule", slot: null };
+  if (today.date !== local.date) return { ...local, reason: "different_day", slot: null };
+  const slot = today.slots.find((item) => item.start <= local.time && local.time < item.end) || null;
+  return { ...local, reason: slot ? "active" : "gap", slot };
+}
+
 const blankConfig = () => ({
   enabled: false,
   persona_source: "plugin",
@@ -19,6 +51,14 @@ const blankConfig = () => ({
     enabled: false, target_session: "", target_bot_id: "",
     activity: "", location: "", mood: "", energy: "", source: "manual",
     updated_at: "", expires_at: "",
+  },
+  schedule: {
+    enabled: false, auto_generate: true, timezone: "Asia/Shanghai",
+    generation_rule: "根据角色职业、常住地和作息生成；模板为可选固定安排。",
+    template_lines: [], allow_manual_override: true, max_segments: 12,
+    generation_mode: "persona", wake_time: "07:30", sleep_time: "23:00",
+    work_start: "09:00", work_end: "17:30", workdays: ["1", "2", "3", "4", "5"],
+    work_location: "", home_location: "",
   },
   profile: {
     name: "", nickname: "", gender_identity: "", pronouns: "", age: "", age_mode: "fixed",
@@ -85,13 +125,14 @@ function mergeDeep(target, source) {
 }
 
 const labels = {
-  profile: "基础资料", dynamic_state: "当前状态", background: "经历与世界", personality: "性格核心", behavior: "情境行为",
+  profile: "基础资料", dynamic_state: "当前状态", schedule: "今日日程", background: "经历与世界", personality: "性格核心", behavior: "情境行为",
   relationship: "专属关系", speech: "说话方式", response: "回复策略", roleplay: "动作与场景",
   boundaries: "边界保护",
 };
 
 const descriptions = {
   profile: "稳定的身份事实。这里填写“她是谁”。",
+  schedule: "根据角色设定或固定模板生成今日模拟生活安排；只参考当前时间段，不执行现实动作。",
   background: "成长经历、近期长期背景和世界知识，不表示此刻正在发生。",
   dynamic_state: "带来源、作用域和有效期的临时信息。过期只代表不再注入，不自动证明活动已完成。",
   personality: "性格倾向、价值观、缺点和内在矛盾。",
@@ -104,6 +145,7 @@ const descriptions = {
 };
 
 const options = {
+  generation_mode: [["persona", "根据角色与作息生成"], ["template", "固定模板"]],
   source: [["manual", "人工填写"], ["confirmed_event", "已确认事件（需人工确认）"]],
   age_mode: [["fixed", "固定年龄"], ["growing", "随时间增长"], ["timeline", "角色时间线"]],
   changeability: [["stable", "稳定"], ["influenced", "容易受影响"], ["adaptive", "随关系变化"]],
@@ -133,6 +175,23 @@ const fieldGroups = {
     ["source", "信息来源", "select", "“已确认事件”须由你人工确认，不会自动识别事件或推断情绪。"],
     ["updated_at", "状态确认 / 生效时间", "datetime", "以浏览器时区输入，保存为带时区的 ISO 时间。"],
     ["expires_at", "状态失效时间", "datetime", "读取状态不会续期；到期只停止注入，不表示活动完成。"],
+  ],
+  schedule: [
+    ["enabled", "启用日程模块", "checkbox", "启用并保存后生成今日模拟安排；适用范围使用插件会话和机器人白名单。"],
+    ["auto_generate", "每天自动生成", "checkbox", "当天没有日程时自动生成一次；不自动覆盖已保存日程。"],
+    ["timezone", "日程时区", "text", "例如 Asia/Shanghai。"],
+    ["generation_mode", "生成方式", "select", "按角色与作息生成，或直接使用固定模板。"],
+    ["generation_rule", "生成规则", "textarea", "说明角色生活安排的偏好和限制，不执行现实动作。"],
+    ["template_lines", "可选固定安排 / 模板", "list", "每行：HH:MM-HH:MM | 活动 | 地点 | 备注；单段不跨午夜，结束可用24:00。"],
+    ["wake_time", "起床时间", "time", "用于角色作息安排。"],
+    ["sleep_time", "睡觉时间", "time", "用于角色作息安排。"],
+    ["work_start", "工作开始", "time", "工作日的开始时间。"],
+    ["work_end", "工作结束", "time", "工作日的结束时间。"],
+    ["workdays", "工作日", "list", "每行一个数字：1为周一，7为周日。"],
+    ["work_location", "工作地点", "text", "留空时根据角色设定处理。"],
+    ["home_location", "居家地点", "text", "留空时根据角色常住地处理。"],
+    ["allow_manual_override", "允许手动修改今日安排", "checkbox", "关闭后不允许保存手动编辑的时间段。"],
+    ["max_segments", "最多时间段", "number", "生成或保存的时间段数量上限。"],
   ],
   profile: [
     ["name", "姓名", "text", "角色的正式姓名或主要称呼。"], ["nickname", "昵称", "text", "常用昵称或自称。"],
@@ -270,6 +329,20 @@ function renderField(config, group, field) {
       h("small", hint),
     ]);
   }
+  if (type === "number" || type === "time") {
+    return h("label", { class: "field", key }, [
+      h("span", label),
+      h("input", {
+        id: `${group}-${key}`, type, step: type === "number" ? 1 : 60,
+        min: type === "number" ? 1 : undefined,
+        value: model.value,
+        onInput: (event) => {
+          model.value = type === "number" ? event.target.valueAsNumber : event.target.value;
+        },
+      }),
+      h("small", hint),
+    ]);
+  }
   if (type === "scope") {
     const identifiers = key === "target_session" ? config.allowed_sessions : config.allowed_bot_ids;
     const listId = `dynamic-state-${key}-options`;
@@ -329,10 +402,22 @@ function useAppState() {
   const summary = reactive({ version: "—", valid: false, enabled: false, authority_mode: "overlay", config_error: "" });
   const active = ref("profile");
   const busy = ref(false);
+  const loaded = ref(false);
+  const scheduleLoaded = ref(false);
+  const loadedSnapshot = ref("");
   const message = ref("");
   const messageKind = ref("ok");
+  const scheduleToday = ref(null);
+  const scheduleBusy = ref(false);
+  const scheduleDraft = ref([]);
+  const scheduleDirty = ref(false);
+  const scheduleStatus = ref({});
+  const scheduleTimezone = ref("Asia/Shanghai");
   const sections = Object.keys(fieldGroups);
   const clock = ref(Date.now());
+  const scheduleCurrent = computed(() => currentSchedule(scheduleToday.value, scheduleTimezone.value, clock.value));
+  const canGenerate = computed(() => loaded.value && scheduleLoaded.value && summary.enabled && config.schedule.enabled && !scheduleBusy.value && !busy.value);
+  const canEditSchedule = computed(() => canGenerate.value && config.schedule.allow_manual_override && Boolean(scheduleToday.value) && scheduleCurrent.value.reason !== "different_day");
   const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "浏览器本地时区";
   const dynamicStatus = computed(() => stateSummary(summary.dynamic_state, clock.value));
   let clockTimer;
@@ -383,41 +468,170 @@ function useAppState() {
     ]);
   }
 
-  async function load() {
+  function showError(prefix, error) {
+    message.value = `${prefix}：${error.message || error}`;
+    messageKind.value = "error";
+  }
+
+  async function loadSchedule({ discardDraft = false, preserveDraft = false } = {}) {
+    if (scheduleDirty.value && !discardDraft && !preserveDraft) {
+      if (!window.confirm("重新读取会丢弃未保存的今日日程草稿，继续吗？")) return false;
+    }
+    scheduleLoaded.value = false;
     try {
       await connect();
-      const result = await withTimeout(
-        bridge.apiGet("settings"),
-        "读取配置超时，请刷新或从插件详情页重新打开",
-      );
-      mergeDeep(config, result.config || {});
-      Object.assign(summary, result.summary || {});
+      const result = unwrapResponse(await withTimeout(bridge.apiGet("schedule"), "读取今日日程超时"));
+      if (!Object.hasOwn(result, "today") || !result.status || !result.config) {
+        throw new Error("日程响应缺少配置或今日数据");
+      }
+      if (result.today !== null && (!result.today || !Array.isArray(result.today.slots))) {
+        throw new Error("日程时间段数据无效");
+      }
+      if (!preserveDraft || !scheduleDirty.value) {
+        scheduleToday.value = result.today;
+        scheduleDraft.value = (result.today?.slots || []).map((slot) => ({ ...slot }));
+        scheduleDirty.value = false;
+      }
+      // Keep the original revision with an unsaved draft so the backend can
+      // reject a concurrent edit instead of silently overwriting it.
+      scheduleTimezone.value = result.today?.timezone || result.config.timezone || "Asia/Shanghai";
+      scheduleStatus.value = result.status;
+      scheduleLoaded.value = true;
+      return true;
     } catch (error) {
-      message.value = `读取配置失败：${error.message || error}`;
-      messageKind.value = "error";
+      // Keep any draft so network or concurrency failures never erase manual work.
+      showError("读取日程失败", error);
+      return false;
     }
   }
 
+  function settingsChanged() {
+    return loadedSnapshot.value !== JSON.stringify(config);
+  }
+
+  async function generateSchedule() {
+    if (!canGenerate.value) return;
+    if (settingsChanged()) {
+      message.value = "请先保存设置，再生成日程。生成仅使用已经保存的角色与作息配置。";
+      messageKind.value = "error";
+      return;
+    }
+    const existing = scheduleToday.value;
+    const replacing = Boolean(existing || scheduleDirty.value);
+    if (replacing && !window.confirm("今天已有安排或手动草稿。重新生成将替换今日时间段，确定继续吗？")) return;
+    scheduleBusy.value = true;
+    try {
+      await connect();
+      const body = { confirm: replacing };
+      if (existing?.revision !== undefined) {
+        body.revision = existing.revision;
+        body.date = existing.date;
+        body.timezone = existing.timezone;
+      }
+      unwrapResponse(await withTimeout(bridge.apiPost("schedule/generate", body), "生成日程超时"));
+      const reloaded = await loadSchedule({ discardDraft: true });
+      if (reloaded) {
+        message.value = "今日日程已生成并重新读取。";
+        messageKind.value = "ok";
+      }
+    } catch (error) { showError("生成日程失败", error); }
+    finally { scheduleBusy.value = false; }
+  }
+
+  function editSlot(index, key, value) {
+    scheduleDraft.value[index][key] = value;
+    scheduleDirty.value = true;
+  }
+  function addSlot() {
+    if (!canEditSchedule.value) return;
+    scheduleDraft.value.push({ start: "", end: "", activity: "", location: "", notes: "" });
+    scheduleDirty.value = true;
+  }
+  function deleteSlot(index) {
+    if (!canEditSchedule.value) return;
+    scheduleDraft.value.splice(index, 1);
+    scheduleDirty.value = true;
+  }
+  function validateSlots(slots) {
+    if (!slots.length) throw new Error("至少保留一个时间段");
+    if (slots.length > config.schedule.max_segments) throw new Error("时间段数量超过设置上限");
+    let previousEnd = "00:00";
+    for (const [index, slot] of slots.entries()) {
+      if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(slot.start)) throw new Error(`第 ${index + 1} 段开始时间无效`);
+      if (!/^(?:(?:[01]\d|2[0-3]):[0-5]\d|24:00)$/.test(slot.end)) throw new Error(`第 ${index + 1} 段结束时间无效`);
+      if (slot.start >= slot.end) throw new Error(`第 ${index + 1} 段不能跨夜或倒置`);
+      if (slot.start < previousEnd) throw new Error(`第 ${index + 1} 段与前段重叠或未按时间排序`);
+      if (!slot.activity.trim()) throw new Error(`第 ${index + 1} 段需要填写活动`);
+      previousEnd = slot.end;
+    }
+  }
+  async function saveToday() {
+    if (!canEditSchedule.value || !scheduleDirty.value) return;
+    if (settingsChanged()) {
+      message.value = "请先保存设置，再保存今日日程；未保存的时间段草稿会保留。";
+      messageKind.value = "error";
+      return;
+    }
+    scheduleBusy.value = true;
+    try {
+      const slots = scheduleDraft.value.map((slot) => Object.fromEntries(
+        ["start", "end", "activity", "location", "notes"].map((key) => [key, String(slot[key] || "").trim()])
+      ));
+      validateSlots(slots);
+      await connect();
+      unwrapResponse(await withTimeout(bridge.apiPost("schedule/update", {
+        slots, revision: scheduleToday.value.revision,
+        date: scheduleToday.value.date, timezone: scheduleToday.value.timezone,
+      }), "保存今日日程超时"));
+      if (await loadSchedule({ discardDraft: true })) {
+        message.value = "今日日程已保存并重新读取。";
+        messageKind.value = "ok";
+      }
+    } catch (error) { showError("保存今日日程失败（草稿已保留）", error); }
+    finally { scheduleBusy.value = false; }
+  }
+
+  async function load() {
+    loaded.value = false;
+    try {
+      await connect();
+      const result = unwrapResponse(await withTimeout(
+        bridge.apiGet("settings"), "读取配置超时，请刷新或从插件详情页重新打开",
+      ));
+      if (!result.config || typeof result.config !== "object" || Array.isArray(result.config) || !result.summary) {
+        throw new Error("配置响应缺少 config / summary，未采用空白表单");
+      }
+      mergeDeep(config, result.config);
+      Object.assign(summary, result.summary);
+      loadedSnapshot.value = JSON.stringify(config);
+      loaded.value = true;
+      await loadSchedule();
+    } catch (error) { showError("读取配置失败", error); }
+  }
+
   async function save() {
+    if (!loaded.value || busy.value || scheduleBusy.value) return;
     busy.value = true;
     message.value = "保存中…";
     try {
       await connect();
       const payload = JSON.parse(JSON.stringify(config));
-      const result = await withTimeout(
-        bridge.apiPost("settings", payload),
-        "保存超时，请确认插件仍已启用后重试",
-      );
-      mergeDeep(config, result.config || payload);
-      Object.assign(summary, result.summary || {});
-      message.value = "已保存，新请求立即使用新配置。";
-      messageKind.value = "ok";
-    } catch (error) {
-      message.value = `保存失败：${error.message || error}`;
-      messageKind.value = "error";
-    } finally {
-      busy.value = false;
-    }
+      const result = unwrapResponse(await withTimeout(
+        bridge.apiPost("settings", payload), "保存超时，请确认插件仍已启用后重试",
+      ));
+      if (!result.saved || !result.config || !result.summary) throw new Error("服务端未确认配置保存成功");
+      mergeDeep(config, result.config);
+      Object.assign(summary, result.summary);
+      loadedSnapshot.value = JSON.stringify(config);
+      const hadDraft = scheduleDirty.value;
+      if (await loadSchedule({ preserveDraft: true })) {
+        message.value = hadDraft
+          ? "设置已保存并重新读取日程；手动草稿和原版本保留，请再保存今日。"
+          : "设置已保存，新请求立即生效；今日日程已重新读取。";
+        messageKind.value = "ok";
+      }
+    } catch (error) { showError("保存失败", error); }
+    finally { busy.value = false; }
   }
 
   onMounted(() => {
@@ -429,7 +643,9 @@ function useAppState() {
   return {
     config, summary, active, busy, message, messageKind, sections,
     sessionsText, botsText, relationFilled, save,
-    dynamicStatus, browserTimezone, setValidity,
+    dynamicStatus, browserTimezone, setValidity, scheduleToday, scheduleCurrent, scheduleBusy, generateSchedule,
+    loaded, scheduleLoaded, scheduleDraft, scheduleDirty, scheduleStatus,
+    canGenerate, canEditSchedule, loadSchedule, editSlot, addSlot, deleteSlot, saveToday,
   };
 }
 
@@ -442,11 +658,61 @@ const App = {
   },
 };
 
+function renderSchedule(state) {
+  const {
+    config, summary, loaded, busy, scheduleToday, scheduleCurrent, scheduleBusy,
+    scheduleLoaded, scheduleDraft, scheduleDirty, scheduleStatus,
+    canGenerate, canEditSchedule, loadSchedule, generateSchedule,
+    editSlot, addSlot, deleteSlot, saveToday,
+  } = state;
+  const current = scheduleCurrent.value;
+  const running = summary.enabled && config.schedule.enabled;
+  const title = !running ? "日程模块未启用"
+    : current.reason === "different_day" ? "已跨日，请重新读取今日日程"
+    : current.reason === "invalid_timezone" ? "日程时区无效，请修改设置"
+    : current.slot ? `${current.slot.activity} · ${current.slot.location || "未填写位置"}`
+    : "当前没有匹配时段";
+  return h("div", { class: "schedule-overview" }, [
+    h("div", { class: `dynamic-state-status ${running && current.slot ? "is-active" : ""}` }, [
+      h("small", `已保存的今日安排 · ${scheduleToday.value?.date || "未生成"} · ${scheduleToday.value?.timezone || config.schedule.timezone}`),
+      h("strong", { id: "schedule-current", role: "status", "aria-live": "polite" }, title),
+      h("p", running && current.slot ? `${current.slot.start} - ${current.slot.end}（按已保存时间段实时匹配）`
+        : "当前卡片只参考已保存日程。过了日期不会沿用昨天安排，手动草稿保存成功后才生效。"),
+      h("small", `服务状态：${scheduleStatus.value.reason || (scheduleLoaded.value ? "已读取" : "尚未读取")}`),
+    ]),
+    h("p", { class: "timezone-note" }, "先保存角色与日程设置，再生成今日安排。日程只模拟角色生活，不调用外部工具执行现实动作；有效人工当前状态优先于日程。"),
+    h("div", { class: "validity-actions" }, [
+      h("button", { id: "schedule-reload", type: "button", disabled: scheduleBusy.value || busy.value || !loaded.value, onClick: () => loadSchedule() }, "重新读取"),
+      h("button", { id: "schedule-generate", type: "button", disabled: !canGenerate.value, onClick: generateSchedule }, scheduleBusy.value ? "处理中…" : scheduleToday.value ? "重新生成今日安排" : "生成今日安排"),
+    ]),
+    scheduleToday.value ? h("div", { class: "schedule-editor" }, [
+      h("div", { class: "schedule-editor-heading" }, [h("b", "编辑今日时间段"), h("span", scheduleDirty.value ? "有未保存草稿" : "与已保存日程一致")]),
+      h("p", { class: "timezone-note" }, "按时间顺序填写，允许空档但不能重叠或跨夜；结束可填24:00。添加、删除或编辑后点击“保存今日日程”。"),
+      ...scheduleDraft.value.map((slot, index) => h("div", { class: "schedule-slot-editor", key: index }, [
+        h("span", { class: "slot-number" }, `第 ${index + 1} 段`),
+        ...[["start", "开始", "HH:MM"], ["end", "结束", "HH:MM 或 24:00"], ["activity", "活动", "此时在做什么"], ["location", "地点", "此时在哪里"], ["notes", "备注", "可选说明"]].map(([key, label, placeholder]) =>
+          h("label", { class: `field slot-${key}` }, [
+            h("span", label),
+            h("input", { id: `schedule-slot-${index}-${key}`, type: "text", value: slot[key] || "", placeholder, disabled: !canEditSchedule.value, onInput: (event) => editSlot(index, key, event.target.value) }),
+          ])),
+        h("button", { type: "button", class: "slot-delete", "data-delete-slot": index, disabled: !canEditSchedule.value, onClick: () => deleteSlot(index) }, "删除此段"),
+      ])),
+      h("div", { class: "validity-actions" }, [
+        h("button", { id: "schedule-add-slot", type: "button", disabled: !canEditSchedule.value || scheduleDraft.value.length >= config.schedule.max_segments, onClick: addSlot }, "添加时间段"),
+        h("button", { id: "schedule-save-today", type: "button", disabled: !canEditSchedule.value || !scheduleDirty.value, onClick: saveToday }, "保存今日日程"),
+      ]),
+      !config.schedule.allow_manual_override ? h("p", { class: "timezone-note" }, "当前不允许手动修改，请先开启并保存设置。") : null,
+    ]) : h("p", { class: "timezone-note" }, "今天还没有保存的日程；先启用并保存设置，再生成。"),
+  ]);
+}
+
 function renderApp(state) {
   const {
     config, summary, active, busy, message, messageKind, sections,
     sessionsText, botsText, relationFilled, save,
-    dynamicStatus, browserTimezone, setValidity,
+    dynamicStatus, browserTimezone, setValidity, scheduleToday, scheduleCurrent, scheduleBusy, generateSchedule,
+    loaded, scheduleLoaded, scheduleDraft, scheduleDirty, scheduleStatus,
+    canGenerate, canEditSchedule, loadSchedule, editSlot, addSlot, deleteSlot, saveToday,
   } = state;
   return h("div", { class: "app-shell" }, [
     h("header", { class: "hero" }, [
@@ -592,6 +858,7 @@ function renderApp(state) {
                 ]),
                 h("span", { class: "count" }, `${fieldGroups[active.value].length} 个字段`),
               ]),
+              active.value === "schedule" ? renderSchedule(state) : null,
               active.value === "dynamic_state" ? h("div", { class: "dynamic-state-overview" }, [
                 h("div", {
                   class: `dynamic-state-status ${dynamicStatus.value.active ? "is-active" : ""}`,
@@ -621,7 +888,7 @@ function renderApp(state) {
     ]),
     h("footer", [
       h("span", "结构化配置兼容旧版 character / expression 字段。"),
-      h("button", { class: "save", disabled: busy.value, onClick: save }, busy.value ? "保存中…" : "保存配置"),
+      h("button", { class: "save", disabled: !loaded.value || busy.value || scheduleBusy.value, onClick: save }, busy.value ? "保存中…" : !loaded.value ? "等待读取配置" : "保存配置"),
     ]),
   ]);
 }

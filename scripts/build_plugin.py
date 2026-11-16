@@ -18,6 +18,7 @@ BASE_RELEASE_FILES = (
     "personality.py",
     "runtime.py",
     "dynamic_state.py",
+    "schedule.py",
     "metadata.yaml",
     "_conf_schema.json",
     "requirements.txt",
@@ -33,6 +34,7 @@ BASE_RELEASE_FILES = (
     "docs/FIELD_MAPPING.md",
     "docs/IDENTITY_AUTHORITY.md",
     "docs/DYNAMIC_STATE.md",
+    "docs/SCHEDULE.md",
     "CONTRIBUTING.md",
 )
 

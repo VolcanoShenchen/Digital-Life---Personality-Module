@@ -1,6 +1,6 @@
 # General_purpose_personality_plugin
 
-AstrBot 私聊人格与表达插件，预览版本 `0.3.0`。
+AstrBot 私聊人格与表达插件，预览版本 `0.4.0`。
 
 通过 AstrBot 正常聊天请求加入结构化角色资料、情境行为、语言习惯和回复策略，复用宿主的模型、历史、工具和消息发送。当前目标平台为 NapCat 经 AstrBot `aiocqhttp` 适配器接入的 QQ 私聊。
 
@@ -8,7 +8,7 @@ AstrBot 私聊人格与表达插件，预览版本 `0.3.0`。
 
 - 已实现结构化人格配置、两种人格来源、管理员诊断、Vue 配置页面与完整安装包构建。
 - 开发基线：AstrBot **4.29.4**、Python **3.12+**、内置 Agent。元数据暂限定 `==4.29.4`。
-- 已完成 60 项本地测试、完整宿主启动/插件加载、Vue 页面发现及真实配置 API 烟测；QQ 收发、模型/工具/流式和角色效果仍待验证。
+- 已完成116项本地测试、本地宿主重载、真实Edge日程控件操作和API保存回读、真实临时内容/历史排除验证；模型对话效果仍需试聊。
 - 本版是供隔离测试的预览版。详细结果见 [验证记录](docs/VALIDATION.md)。
 
 ## 功能
@@ -23,7 +23,10 @@ AstrBot 私聊人格与表达插件，预览版本 `0.3.0`。
 - 管理员私聊命令 `/人格状态`，只展示注入判定，不显示完整资料。
 - 安装后默认关闭；空会话名单或空机器人名单均不会生效。
 
-首版不含持久情绪、长期记忆、多角色、主动联系、生活日程、分段发送或语音生图。聊天中的短期承接依赖 AstrBot 提供的上下文。语气通过模型提示引导，效果需要实际试聊，规则本身会增加输入 token。
+- 可选今日日程模块：按角色职业、常住地与作息生成当天安排；当前时段临时注入，支持人工编辑与跨日更新。
+- 人工当前状态有有效期，可按字段优先覆盖日程，不进入稳定人格。
+
+本版不含自动情绪成长、长期记忆、多角色、主动消息、分段发送或语音生图。日程采用本地规则生成，不额外调用模型；角色表达效果需要实际试聊。
 
 ## 配置入口
 
@@ -50,7 +53,7 @@ AstrBot 私聊人格与表达插件，预览版本 `0.3.0`。
 - AstrBot 内部标识及安装目录：`astrbot_plugin_digital_life_personality`。
 - 远端：[VolcanoShenchen/Digital-Life---Personality-Module](https://github.com/VolcanoShenchen/Digital-Life---Personality-Module)。
 
-内部标识用于宿主加载和配置文件，不更改项目名称。本地 Git 默认分支为 `main`，实现位于 `feature/personality-v0.1`；尚未推送。远端访问状态见项目计划。
+当前日程实现位于 `feature/schedule-v0.4`，尚未推送。0.2.1曾推送至远端main；新版本发布与远端同步分别处理。
 
 ## 开发与构建
 
@@ -62,7 +65,7 @@ python -m ruff check .
 python -m ruff format --check .
 python -m unittest discover -s tests -v
 python scripts/build_plugin.py --output dist/preview
-python scripts/build_plugin.py --verify dist/preview/astrbot_plugin_digital_life_personality-v0.2.0.zip
+python scripts/build_plugin.py --verify dist/preview/astrbot_plugin_digital_life_personality-v0.4.0.zip
 ```
 
 前端使用 Vue 3 + Vite。首次构建需要 Node.js 20+ 与 pnpm：
@@ -87,6 +90,7 @@ pnpm run build
 - [字段拆分对照清单](docs/FIELD_MAPPING.md)
 - [身份主控验收](docs/IDENTITY_AUTHORITY.md)
 - [动态状态说明](docs/DYNAMIC_STATE.md)
+- [今日日程说明](docs/SCHEDULE.md)
 - [验证记录](docs/VALIDATION.md)
 - [变更记录](CHANGELOG.md)
 - [开发约定](CONTRIBUTING.md)

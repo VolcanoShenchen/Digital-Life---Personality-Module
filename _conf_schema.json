@@ -66,6 +66,28 @@
       "expires_at": {"type": "string", "description": "状态失效时间", "default": "", "hint": "带时区的 ISO 时间；读取不会延长有效期，到期只停止注入。"}
     }
   },
+  "schedule": {
+    "type": "object",
+    "description": "今日日程模块",
+    "hint": "开启后根据角色职业、常住地和作息生成今日安排；也可选择固定模板模式。",
+    "items": {
+      "generation_mode": {"type": "string", "description": "生成方式", "default": "persona", "options": ["persona", "template"]},
+      "enabled": {"type": "bool", "description": "启用日程模块", "default": false},
+      "auto_generate": {"type": "bool", "description": "每天自动生成", "default": true},
+      "timezone": {"type": "string", "description": "日程时区", "default": "Asia/Shanghai"},
+      "generation_rule": {"type": "text", "description": "日程补充说明（不解析自由文本指令）", "default": "根据角色职业、常住地和作息生成；模板为可选固定安排。"},
+      "wake_time": {"type": "string", "description": "起床时间", "default": "07:30"},
+      "sleep_time": {"type": "string", "description": "睡眠时间", "default": "23:00"},
+      "work_start": {"type": "string", "description": "工作开始", "default": "09:00"},
+      "work_end": {"type": "string", "description": "工作结束", "default": "17:30"},
+      "workdays": {"type": "list", "description": "工作日（1星期一至7星期日）", "default": ["1", "2", "3", "4", "5"]},
+      "work_location": {"type": "string", "description": "工作地点（空时参考角色职业）", "default": ""},
+      "home_location": {"type": "string", "description": "居住场景（空时参考角色常住地）", "default": ""},
+      "template_lines": {"type": "list", "description": "日程模板", "default": [], "hint": "每行：HH:MM-HH:MM | 活动 | 地点 | 备注。"},
+      "allow_manual_override": {"type": "bool", "description": "允许手动修改今日安排", "default": true},
+      "max_segments": {"type": "int", "description": "最多时间段", "default": 12, "slider": {"min": 1, "max": 32, "step": 1}}
+    }
+  },
   "profile": {
     "type": "object",
     "description": "基础身份资料",

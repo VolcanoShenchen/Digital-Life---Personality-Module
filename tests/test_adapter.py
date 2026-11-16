@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import json
 import sys
+import tempfile
 import types
 import unittest
 from datetime import UTC
@@ -64,8 +65,14 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
                 "astrbot.api.provider",
                 "astrbot.api.star",
                 "astrbot.api.web",
+                "astrbot.core.utils.astrbot_path",
             )
         }
+        self.temp_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_directory.cleanup)
+        modules["astrbot.core.utils.astrbot_path"].get_astrbot_plugin_data_path = (
+            lambda: self.temp_directory.name
+        )
         self.logger = Mock()
         modules["astrbot.api"].AstrBotConfig = dict
         modules["astrbot.api"].logger = self.logger
@@ -192,7 +199,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(event.stopped)
         self.assertTrue(event.call_llm)
         self.assertEqual(len(event.sent), 1)
-        self.assertIn("人格模块 0.3.0", event.sent[0])
+        self.assertIn("人格模块 0.4.0", event.sent[0])
         for private_text in ("测试角色", event.unified_msg_origin, "20001"):
             self.assertNotIn(private_text, event.sent[0])
         self.assertEqual(plugin.personality_status.permission, "ADMIN")
@@ -341,6 +348,115 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(config["enabled"])
         self.assertIs(plugin.runtime, previous)
         self.assertNotIn("PRIVATE_DISK_ERROR", str(result))
+
+    async def test_schedule_enabling_creates_today_and_disable_cancels_background_task(self):
+        class StoredConfig(dict):
+            def save_config(self):
+                pass
+
+        plugin = self.plugin_type(object(), StoredConfig(valid_config()))
+        await plugin.initialize()
+        self.assertIsNone(plugin._schedule_task)
+        self.assertFalse(plugin.schedule_store.path.exists())
+        candidate = valid_config(schedule={"enabled": True, "work_location": "LIBRARY"})
+
+        async def body(default=None):
+            return candidate
+
+        self.web_request.json = body
+        try:
+            result = await plugin.web_save_settings()
+            self.assertTrue(result["saved"])
+            self.assertTrue(plugin.schedule_store.path.exists())
+            task = plugin._schedule_task
+            self.assertIsNotNone(task)
+            candidate = valid_config(schedule={"enabled": False})
+            result = await plugin.web_save_settings()
+            self.assertTrue(result["saved"])
+            self.assertIsNone(plugin._schedule_task)
+            self.assertTrue(task.cancelled())
+        finally:
+            await plugin.terminate()
+
+    async def test_schedule_api_disabled_and_unauthed_requests_cannot_write(self):
+        plugin = self.plugin_type(object(), valid_config())
+        result = await plugin.web_generate_schedule()
+        self.assertEqual(result["status_code"], 400)
+        self.assertFalse(plugin.schedule_store.path.exists())
+        self.web_request.username = None
+        for method in (
+            plugin.web_get_schedule,
+            plugin.web_generate_schedule,
+            plugin.web_update_schedule,
+        ):
+            result = await method()
+            self.assertEqual(result["status_code"], 401)
+
+    async def test_schedule_edit_revision_conflict_and_manual_lock(self):
+        config = valid_config(schedule={"enabled": True})
+        plugin = self.plugin_type(object(), config)
+        plan = plugin.runtime.schedule_today()
+        payload = {
+            "revision": plan["revision"],
+            "date": plan["date"],
+            "timezone": plan["timezone"],
+            "slots": [
+                {
+                    "start": "00:00",
+                    "end": "24:00",
+                    "activity": "EDITED",
+                    "location": "HERE",
+                    "notes": "",
+                }
+            ],
+        }
+
+        async def body(default=None):
+            return payload
+
+        self.web_request.json = body
+        edited = await plugin.web_update_schedule()
+        self.assertTrue(edited["saved"])
+        self.assertEqual(edited["today"]["slots"][0]["activity"], "EDITED")
+        stale = await plugin.web_update_schedule()
+        self.assertEqual(stale["status_code"], 409)
+        payload = {
+            "revision": edited["today"]["revision"],
+            "date": plan["date"],
+            "timezone": plan["timezone"],
+        }
+        denied = await plugin.web_generate_schedule()
+        self.assertEqual(denied["status_code"], 409)
+        payload["confirm"] = True
+        regenerated = await plugin.web_generate_schedule()
+        self.assertTrue(regenerated["saved"])
+        self.assertFalse(regenerated["today"]["manual_override"])
+
+    async def test_yesterday_editor_is_rejected_even_with_current_revision(self):
+        plugin = self.plugin_type(object(), valid_config(schedule={"enabled": True}))
+        plan = plugin.runtime.schedule_today()
+
+        async def body(default=None):
+            return {
+                "date": "2000-01-01",
+                "timezone": plan["timezone"],
+                "revision": plan["revision"],
+                "slots": plan["slots"],
+            }
+
+        self.web_request.json = body
+        result = await plugin.web_update_schedule()
+        self.assertEqual(result["status_code"], 409)
+        self.assertEqual(plugin.schedule_store.load()["revision"], plan["revision"])
+
+    async def test_invalid_stored_schedule_does_not_prevent_personality_request(self):
+        plugin = self.plugin_type(object(), valid_config(schedule={"enabled": True}))
+        plugin.schedule_store.root.mkdir(parents=True)
+        plugin.schedule_store.path.write_text("{broken", "utf-8")
+        req = self.request()
+        await plugin.apply_personality(EventDouble(), req)
+        self.assertIn("测试角色", req.system_prompt)
+        self.assertEqual(plugin.runtime.schedule_status()["reason"], "schedule_unavailable")
 
     async def test_webui_requires_dashboard_authentication(self):
         plugin = self.plugin_type(object(), valid_config())
