@@ -29,7 +29,7 @@
 | `profile.nationality` | 国籍或地区 | 已实现 |
 | `profile.native_language` | 母语 | 已实现 |
 | `profile.timezone` | 所在时区 | 已实现 |
-| `profile.location` | 所在地 | 已实现 |
+| `profile.location` | 常住地 | 已实现；不作为当前所在位置，当前地点由 `dynamic_state.location` 管理 |
 | `profile.occupation` | 职业 | 已实现 |
 | `profile.education` | 教育背景 | 已实现 |
 | `profile.social_status` | 社会身份 | 已实现 |
@@ -46,13 +46,30 @@
 | `background.education_history` | 学习经历 | 已实现 |
 | `background.work_history` | 工作经历 | 已实现 |
 | `background.important_events` | 重要事件 | 已实现，列表 |
-| `background.current_situation` | 当前处境 | 已实现 |
+| `background.current_situation` | 旧版当前处境 | 保留待迁移，不注入 |
 | `background.secrets` | 秘密 | 已实现，列表 |
 | `background.world_setting` | 世界设定 | 已实现 |
 | `background.known_facts` | 明确知道 | 已实现 |
 | `background.unknown_facts` | 明确不知道 | 已实现 |
 
 秘密目前不会自动隐藏或按触发条件解锁，只是提示模型不要随意主动提及；条件触发需要后续状态或记忆模块。
+
+## 动态状态（情绪/生活状态模块入口）
+
+| 配置键 | 含义 | 状态 |
+| --- | --- | --- |
+| `dynamic_state.enabled` | 启用临时状态 | 已实现 |
+| `dynamic_state.target_session/target_bot_id` | 状态作用域 | 已实现，必须同时匹配 |
+| `dynamic_state.activity` | 当前活动 | 已实现，带有效期 |
+| `dynamic_state.location` | 当前位置 | 已实现，区别于常住地 |
+| `dynamic_state.mood` | 当前情绪 | 已实现，人工或确认事件来源 |
+| `dynamic_state.energy` | 当前精力 | 已实现，人工或确认事件来源 |
+| `dynamic_state.source` | 状态来源 | 已实现 |
+| `dynamic_state.updated_at/expires_at` | 起始和失效时间 | 已实现，必须带时区 |
+| `background.life_context` | 长期生活背景/持续项目 | 已实现，属于背景，不表示此刻活动 |
+| `background.current_situation` | 旧版当前处境 | 保留待迁移，不注入 |
+
+动态状态通过 AstrBot 临时内容块进入本轮请求，不写入稳定人格和持久历史。过期不等于活动完成，也不自动生成新活动。
 
 ## 三、性格核心
 
