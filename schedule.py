@@ -1,7 +1,7 @@
-"""Local daily plans: validated rules, atomic persistence and timed lookup.
+"""Validated daily schedules; model planning is isolated in schedule_planner.
 
-Generated entries describe the fictional character's planned scene. They are
-never evidence of real-world actions or tool completion.
+Reading a schedule never calls a model. Only explicitly selected templates can
+be generated synchronously. Model failure never creates substitute activities.
 """
 
 from __future__ import annotations
@@ -26,8 +26,11 @@ if TYPE_CHECKING:
 
 SCHEDULE_START = "<dlp_schedule_context_v1>\n"
 SCHEDULE_END = "\n</dlp_schedule_context_v1>"
-DEFAULT_RULE = "根据角色职业、常住地和作息生成；模板为可选固定安排。"
-GENERATOR_VERSION = 2
+DEFAULT_RULE = (
+    "结合角色身份、性格、兴趣和近期背景生成自然且有变化的今日生活安排，遵守作息与固定时段。"
+)
+PLANNER_VERSION = 1
+GENERATOR_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -39,7 +42,7 @@ class ScheduleConfig:
     template_lines: tuple[str, ...] = ()
     allow_manual_override: bool = True
     max_segments: int = 12
-    generation_mode: str = "persona"
+    generation_mode: str = "llm"
     wake_time: str = "07:30"
     sleep_time: str = "23:00"
     work_start: str = "09:00"
@@ -47,6 +50,9 @@ class ScheduleConfig:
     workdays: tuple[str, ...] = ("1", "2", "3", "4", "5")
     work_location: str = ""
     home_location: str = ""
+    provider_id: str = ""
+    model_timeout: int = 90
+    retry_cooldown: int = 900
 
 
 @dataclass(frozen=True)
@@ -60,10 +66,9 @@ class ScheduleSlot:
 
 
 class ScheduleError(ValueError):
-    """Fixed public error code, never containing raw configuration."""
+    """Fixed error code; never retain raw model or provider error text."""
 
 
-# Kept for first implementation callers.
 ScheduleParseError = ScheduleError
 
 
@@ -120,7 +125,7 @@ def validate_slots(slots: Any, maximum: int = 32, source: str | None = None) -> 
         if minutes(record["start"]) >= minutes(record["end"], end=True):
             raise ScheduleError("slot_time_order")
         record["source"] = source or item.get("source", "manual")
-        if record["source"] not in ("manual", "template", "persona"):
+        if record["source"] not in ("manual", "template", "llm", "persona"):
             raise ScheduleError("invalid_slot_source")
         clean.append(record)
     clean.sort(key=lambda item: item["start"])
@@ -151,21 +156,35 @@ def parse_schedule_config(data: Mapping[str, Any]) -> ScheduleConfig:
         "work_end",
         "work_location",
         "home_location",
+        "provider_id",
     ):
         value = raw.get(key, getattr(defaults, key))
         if not isinstance(value, str):
             raise ConfigError("schedule." + key, "expected_text")
         values[key] = value.strip()
-    if values["generation_mode"] not in ("persona", "template"):
+    if values["generation_mode"] == "persona":
+        values["generation_mode"] = "llm"
+        if values["generation_rule"] in {
+            "按模板生成；不凭空添加未配置的现实事件。",
+            "根据角色职业、常住地和作息生成；模板为可选固定安排。",
+        }:
+            values["generation_rule"] = DEFAULT_RULE
+    if values["generation_mode"] not in ("llm", "template"):
         raise ConfigError("schedule.generation_mode", "invalid_choice")
     try:
         ZoneInfo(values["timezone"])
     except (ZoneInfoNotFoundError, ValueError) as error:
         raise ConfigError("schedule.timezone", "unknown_timezone") from error
-    maximum = raw.get("max_segments", 12)
-    if isinstance(maximum, bool) or not isinstance(maximum, int) or not 1 <= maximum <= 32:
-        raise ConfigError("schedule.max_segments", "invalid_range")
-    values["max_segments"] = maximum
+    for key, lower, upper in (
+        ("max_segments", 1, 32),
+        ("model_timeout", 10, 180),
+        ("retry_cooldown", 60, 86400),
+    ):
+        value = raw.get(key, getattr(defaults, key))
+        if isinstance(value, bool) or not isinstance(value, int) or not lower <= value <= upper:
+            raise ConfigError("schedule." + key, "invalid_range")
+        values[key] = value
+    maximum = values["max_segments"]
     for key in ("template_lines", "workdays"):
         value = raw.get(key, list(getattr(defaults, key)))
         if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
@@ -175,13 +194,15 @@ def parse_schedule_config(data: Mapping[str, Any]) -> ScheduleConfig:
         raise ConfigError("schedule.workdays", "expected_ISO_weekdays_1_to_7")
     if sum(len(line) for line in values["template_lines"]) + len(values["generation_rule"]) > 6000:
         raise ConfigError("schedule", "rules_text_budget_exceeded")
+    if len(values["provider_id"]) > 300:
+        raise ConfigError("schedule.provider_id", "text_too_long")
     try:
         wake, sleep, start, end = (
             minutes(values[key]) for key in ("wake_time", "sleep_time", "work_start", "work_end")
         )
         if not wake < sleep or not start < end:
             raise ScheduleError("invalid_routine_order")
-        if values["generation_mode"] == "persona" and not wake < start < end < sleep:
+        if values["generation_mode"] == "llm" and not wake < start < end < sleep:
             raise ScheduleError("work_must_fit_awake_window")
         if values["template_lines"]:
             validate_slots(
@@ -189,8 +210,8 @@ def parse_schedule_config(data: Mapping[str, Any]) -> ScheduleConfig:
             )
         elif values["enabled"] and values["generation_mode"] == "template":
             raise ScheduleError("template_required")
-        if values["enabled"] and values["generation_mode"] == "persona" and maximum < 5:
-            raise ScheduleError("persona_mode_needs_at_least_5_slots")
+        if values["enabled"] and values["generation_mode"] == "llm" and maximum < 5:
+            raise ScheduleError("llm_mode_needs_at_least_5_slots")
     except ScheduleError as error:
         raise ConfigError("schedule", str(error)) from error
     return ScheduleConfig(**values)
@@ -204,13 +225,81 @@ def local_now(config: ScheduleConfig, now: datetime | None = None) -> datetime:
 
 
 def owner_identity(settings: Settings) -> dict:
-    # Relationship/user history never enters the daily generation seed.
+    """Explicit stable-persona whitelist; excludes relationship/history/secrets."""
+    profile_keys = (
+        "name",
+        "nickname",
+        "gender_identity",
+        "pronouns",
+        "age",
+        "age_mode",
+        "birth_date",
+        "species",
+        "nationality",
+        "native_language",
+        "timezone",
+        "location",
+        "occupation",
+        "education",
+        "social_status",
+    )
+    background_keys = (
+        "identity",
+        "family",
+        "childhood",
+        "education_history",
+        "work_history",
+        "important_events",
+        "life_context",
+        "world_setting",
+        "known_facts",
+        "unknown_facts",
+    )
+    personality_keys = (
+        "core_traits",
+        "positive_traits",
+        "flaws",
+        "values",
+        "dislikes",
+        "fears",
+        "desires",
+        "insecurities",
+        "pride",
+        "contradictions",
+        "self_image",
+        "view_of_others",
+        "changeability",
+        "social_temperature",
+        "legacy_summary",
+    )
+    behavior_keys = (
+        "when_happy",
+        "when_sad",
+        "when_angry",
+        "when_tired",
+        "when_embarrassed",
+        "when_anxious",
+        "when_bored",
+        "when_confused",
+        "when_praised",
+        "when_criticized",
+        "when_disagrees",
+        "when_apologizing",
+        "when_refusing",
+        "when_ignored",
+        "when_topic_changes",
+        "when_memory_missing",
+    )
     return {
         "name": settings.profile.name or settings.character.name,
         "identity": settings.background.identity or settings.character.identity,
         "occupation": settings.profile.occupation,
         "home": settings.profile.location,
         "source": settings.persona_source,
+        "profile": {key: getattr(settings.profile, key) for key in profile_keys},
+        "background": {key: getattr(settings.background, key) for key in background_keys},
+        "personality": {key: getattr(settings.personality, key) for key in personality_keys},
+        "behavior": {key: getattr(settings.behavior, key) for key in behavior_keys},
     }
 
 
@@ -218,7 +307,7 @@ def signature(config: ScheduleConfig, owner: dict | None = None) -> str:
     rules = asdict(config)
     for control in ("enabled", "auto_generate", "allow_manual_override"):
         rules.pop(control)
-    payload = {"owner": owner or {}, "rules": rules, "generator_version": GENERATOR_VERSION}
+    payload = {"owner": owner or {}, "rules": rules, "planner_version": PLANNER_VERSION}
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()
@@ -230,154 +319,83 @@ def owner_signature(owner: dict | None = None) -> str:
     ).hexdigest()
 
 
-def _overlay_anchors(base: list[tuple], anchors: list[dict]) -> list[dict]:
-    """Keep every minute and fixed appointment while forming timeline entries."""
-    boundaries = {point for row in base for point in row[:2]}
-    for slot in anchors:
-        boundaries.update((minutes(slot["start"]), minutes(slot["end"], end=True)))
-    result = []
-    points = sorted(boundaries)
-    for left, right in zip(points, points[1:], strict=False):
-        chosen = next(
-            (s for s in anchors if minutes(s["start"]) <= left < minutes(s["end"], end=True)), None
-        )
-        if chosen:
-            item = {**chosen, "start": clock(left), "end": clock(right), "source": "template"}
-        else:
-            _, _, activity, location = next(row for row in base if row[0] <= left < row[1])
-            item = asdict(
-                ScheduleSlot(
-                    clock(left),
-                    clock(right),
-                    activity,
-                    location,
-                    "根据角色与作息自动安排",
-                    "persona",
-                )
-            )
-        if result and all(
-            result[-1][key] == item[key] for key in ("activity", "location", "notes", "source")
-        ):
-            result[-1]["end"] = item["end"]
-        else:
-            result.append(item)
-    return result
+def matches_owner(plan: dict, owner: dict | None) -> bool:
+    if plan.get("owner_signature") == owner_signature(owner):
+        return True
+    # 0.4.x signed only these stable identity fields. Preserve an explicitly
+    # edited plan for the same character while rejecting old automatic rules.
+    legacy = {
+        key: (owner or {}).get(key, "")
+        for key in ("name", "identity", "occupation", "home", "source")
+    }
+    return bool(
+        plan.get("manual_override") and plan.get("owner_signature") == owner_signature(legacy)
+    )
 
 
 def generate_slots(config: ScheduleConfig, today: date, owner: dict | None = None) -> list[dict]:
-    anchors = [asdict(parse_template_line(line)) for line in config.template_lines]
-    if config.generation_mode == "template":
-        return validate_slots(anchors, config.max_segments, "template")
-    owner = owner or {}
-    home = config.home_location or owner.get("home") or "家中"
-    workplace = config.work_location or (
-        f"{owner['occupation']}的工作场所" if owner.get("occupation") else home
+    """Only an explicit user template may produce activities without a model."""
+    if config.generation_mode != "template":
+        raise ScheduleError("model_generation_required")
+    return validate_slots(
+        [asdict(parse_template_line(line)) for line in config.template_lines],
+        config.max_segments,
+        "template",
     )
-    wake, sleep, start, end = (
-        minutes(getattr(config, key))
-        for key in ("wake_time", "sleep_time", "work_start", "work_end")
-    )
-    working = str(today.isoweekday()) in config.workdays and bool(
-        owner.get("occupation") or config.work_location
-    )
-    middle = ("处理工作事务", workplace) if working else ("安排个人事务与休闲", home)
-    base = [
-        (0, wake, "睡眠与休息", home),
-        (wake, start, "起床、早餐和准备", home),
-        (start, end, *middle),
-        (end, sleep, "晚餐与个人时间", home),
-        (sleep, 1440, "睡眠与休息", home),
-    ]
-    # Insert useful daily activities, instead of one work block and one
-    # evening block. Short awake windows still retain a valid continuous plan.
-    proposals = []
-    if end - start >= 150:
-        lunch = max(start + 30, min(12 * 60, end - 90))
-        first = (
-            f"处理{owner['occupation']}相关事务"
-            if working and owner.get("occupation")
-            else "处理上午事务"
-            if working
-            else "处理个人事务"
-        )
-        second = (
-            f"继续{owner['occupation']}相关工作与收尾"
-            if working and owner.get("occupation")
-            else "处理下午事务与收尾"
-            if working
-            else "个人兴趣与休闲"
-        )
-        proposals.append(
-            (
-                start,
-                end,
-                [
-                    (start, lunch, first, workplace if working else home),
-                    (lunch, lunch + 60, "午餐与休息", workplace if working else home),
-                    (lunch + 60, end, second, workplace if working else home),
-                ],
-            )
-        )
-    if sleep - end >= 90:
-        dinner_end = end + min(60, (sleep - end) // 3)
-        proposals.append(
-            (
-                end,
-                sleep,
-                [
-                    (end, dinner_end, "晚餐与休息", home),
-                    (dinner_end, sleep, "个人时间与放松", home),
-                ],
-            )
-        )
-        if sleep - dinner_end >= 60:
-            proposals.append(
-                (
-                    dinner_end,
-                    sleep,
-                    [
-                        (dinner_end, sleep - 30, "个人时间与放松", home),
-                        (sleep - 30, sleep, "洗漱与睡前准备", home),
-                    ],
-                )
-            )
-    if start - wake >= 45:
-        ready = wake + min(30, (start - wake) // 2)
-        proposals.append(
-            (
-                wake,
-                start,
-                [
-                    (wake, ready, "起床与洗漱", home),
-                    (ready, start, "早餐与出发准备" if working else "早餐与晨间休息", home),
-                ],
-            )
-        )
-    # No slot is truncated to meet the configured maximum. Lower limits choose
-    # a coarser routine; fixed template anchors are always kept in full.
-    result = _overlay_anchors(base, anchors)
-    for left, right, replacements in proposals:
-        candidate = []
-        found = False
-        for row in base:
-            if row[0] == left and row[1] == right:
-                candidate.extend(replacements)
-                found = True
-            else:
-                candidate.append(row)
-        if found:
-            proposed = _overlay_anchors(candidate, anchors)
-            if len(proposed) <= config.max_segments:
-                base, result = candidate, proposed
-    return validate_slots(result, config.max_segments)
+
+
+def validate_model_response(
+    response: str, config: ScheduleConfig, expected_date: date
+) -> list[dict]:
+    if not isinstance(response, str) or len(response) > 65536:
+        raise ScheduleError("invalid_model_response")
+    text = response.strip()
+    if text.startswith("```"):
+        match = re.fullmatch(r"```(?:json)?\s*\n(.*?)\n```", text, re.DOTALL | re.IGNORECASE)
+        if not match:
+            raise ScheduleError("invalid_model_json")
+        text = match.group(1).strip()
+    try:
+        document = json.loads(text)
+    except (ValueError, TypeError) as error:
+        raise ScheduleError("invalid_model_json") from error
+    if not isinstance(document, dict) or "tool_calls" in document:
+        raise ScheduleError("invalid_model_document")
+    if set(document) != {"date", "timezone", "slots"}:
+        raise ScheduleError("invalid_model_document")
+    if document["date"] != expected_date.isoformat() or document["timezone"] != config.timezone:
+        raise ScheduleError("model_date_or_timezone_mismatch")
+    for item in document["slots"] if isinstance(document["slots"], list) else []:
+        if not isinstance(item, dict) or set(item) != {
+            "start",
+            "end",
+            "activity",
+            "location",
+            "notes",
+        }:
+            raise ScheduleError("invalid_model_slot_schema")
+    slots = validate_slots(document["slots"], config.max_segments, "llm")
+    if slots[0]["start"] != "00:00" or slots[-1]["end"] != "24:00":
+        raise ScheduleError("model_incomplete_day")
+    if any(left["end"] != right["start"] for left, right in zip(slots, slots[1:], strict=False)):
+        raise ScheduleError("model_incomplete_day")
+    for line in config.template_lines:
+        anchor = asdict(parse_template_line(line))
+        if not any(
+            all(slot[key] == anchor[key] for key in ("start", "end", "activity", "location"))
+            for slot in slots
+        ):
+            raise ScheduleError("model_fixed_anchor_changed")
+    return slots
 
 
 class ScheduleStore:
-    """Lazy, atomic workspace data storage; no I/O when the module is disabled."""
+    """Atomic lazy storage; reads do not call or schedule model generation."""
 
     def __init__(self, root: str | Path):
         self.root = Path(root)
         self.path = self.root / "today_schedule.json"
+        self.status_path = self.root / "generation_status.json"
         self._lock = threading.RLock()
 
     def load(self) -> dict | None:
@@ -396,18 +414,43 @@ class ScheduleStore:
         except (ValueError, TypeError, KeyError, ZoneInfoNotFoundError) as error:
             raise ScheduleError("stored_schedule_invalid") from error
 
-    def _save(self, value: dict) -> None:
+    def _write_json(self, path: Path, value: dict) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         temporary = self.root / (".schedule-" + uuid.uuid4().hex + ".tmp")
         try:
             temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", "utf-8")
-            temporary.replace(self.path)
+            temporary.replace(path)
         finally:
             if temporary.exists():
                 temporary.unlink()
 
+    def _save(self, value: dict) -> None:
+        self._write_json(self.path, value)
+
+    def load_generation_status(self) -> dict | None:
+        with self._lock:
+            if not self.status_path.is_file():
+                return None
+            try:
+                value = json.loads(self.status_path.read_text("utf-8"))
+                if not isinstance(value, dict):
+                    raise ValueError
+                return value
+            except (ValueError, TypeError) as error:
+                raise ScheduleError("stored_generation_status_invalid") from error
+
+    def save_generation_status(self, value: dict) -> None:
+        with self._lock:
+            self._write_json(self.status_path, value)
+
     def _record(
-        self, config: ScheduleConfig, today: date, slots: list, owner: dict | None, manual: bool
+        self,
+        config: ScheduleConfig,
+        today: date,
+        slots: list,
+        owner: dict | None,
+        manual: bool,
+        provider_id: str = "",
     ) -> dict:
         return {
             "schema_version": 1,
@@ -417,6 +460,9 @@ class ScheduleStore:
             "generated_at": datetime.now(UTC).isoformat(),
             "generation_mode": config.generation_mode,
             "generator_version": GENERATOR_VERSION,
+            "planner_version": PLANNER_VERSION,
+            "provider_id": provider_id,
+            "source": "manual" if manual else config.generation_mode,
             "generation_rule": config.generation_rule,
             "owner_signature": owner_signature(owner),
             "rules_signature": signature(config, owner),
@@ -440,6 +486,8 @@ class ScheduleStore:
     ) -> dict:
         if not config.enabled:
             raise ScheduleError("module_disabled")
+        if config.generation_mode != "template":
+            raise ScheduleError("model_generation_required")
         today = today or local_now(config).date()
         with self._lock:
             existing = self.load()
@@ -448,7 +496,7 @@ class ScheduleStore:
                 existing
                 and existing.get("date") == today.isoformat()
                 and existing.get("timezone") == config.timezone
-                and existing.get("owner_signature") == owner_signature(owner)
+                and matches_owner(existing, owner)
                 and existing.get("manual_override")
                 and not confirm
             ):
@@ -468,16 +516,18 @@ class ScheduleStore:
             current = self.load()
             same_owner = (
                 current
-                and current.get("owner_signature") == owner_signature(owner)
+                and matches_owner(current, owner)
                 and current.get("timezone") == config.timezone
             )
             if same_owner and current.get("date") == today.isoformat():
-                # Manual edits survive rule changes and restarts for this character/day.
-                if current.get("manual_override") or current.get("rules_signature") == signature(
-                    config, owner
-                ):
+                if current.get("manual_override"):
                     return current
-            if not config.auto_generate:
+                matching_source = current.get("generation_mode") == config.generation_mode and all(
+                    slot.get("source") == config.generation_mode for slot in current["slots"]
+                )
+                if matching_source and current.get("rules_signature") == signature(config, owner):
+                    return current
+            if config.generation_mode != "template" or not config.auto_generate:
                 return None
             return self.generate(config, today, owner=owner)
 
@@ -493,6 +543,30 @@ class ScheduleStore:
             if minutes(slot["start"]) <= instant < minutes(slot["end"], end=True):
                 return {**slot, "date": plan["date"], "timezone": config.timezone}
         return None
+
+    def commit_model(
+        self,
+        config: ScheduleConfig,
+        slots: list,
+        *,
+        owner: dict,
+        expected_revision: str | None,
+        expected_date: date,
+        provider_id: str,
+        now: datetime | None = None,
+    ) -> dict:
+        if not config.enabled or config.generation_mode != "llm":
+            raise ScheduleError("module_disabled")
+        if local_now(config, now).date() != expected_date:
+            raise ScheduleError("generation_date_changed")
+        clean = validate_slots(slots, config.max_segments, "llm")
+        with self._lock:
+            current = self.load()
+            if (current or {}).get("revision") != expected_revision:
+                raise ScheduleError("revision_conflict")
+            result = self._record(config, expected_date, clean, owner, False, provider_id)
+            self._save(result)
+            return result
 
     def update_slots(
         self,
@@ -518,7 +592,7 @@ class ScheduleStore:
                 and (
                     existing["date"] != today.isoformat()
                     or existing["timezone"] != config.timezone
-                    or existing["owner_signature"] != owner_signature(owner)
+                    or not matches_owner(existing, owner)
                 )
             ):
                 raise ScheduleError("schedule_scope_or_date_changed")
@@ -568,10 +642,6 @@ def build_schedule_context(
         )
     if slot["notes"]:
         lines.append("备注：" + safe(slot["notes"]))
-    if settings.schedule.generation_rule:
-        lines.append(
-            "运营者日程补充说明（不改变固定时间规则）：" + safe(settings.schedule.generation_rule)
-        )
     lines.append(
         "话题相关时自然回答活动和位置，不播报整份日程，不把昨天日程当今天事实，不虚构工具执行或现实行动。"
     )

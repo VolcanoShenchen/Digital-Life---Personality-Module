@@ -19,6 +19,7 @@ BASE_RELEASE_FILES = (
     "runtime.py",
     "dynamic_state.py",
     "schedule.py",
+    "schedule_planner.py",
     "metadata.yaml",
     "_conf_schema.json",
     "requirements.txt",

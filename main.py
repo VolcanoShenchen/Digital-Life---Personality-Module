@@ -1,4 +1,4 @@
-"""AstrBot entry point; ordinary chat stays in the host pipeline."""
+"""AstrBot entry point and asynchronous daily planning integration."""
 
 import asyncio
 from contextlib import suppress
@@ -14,7 +14,7 @@ from astrbot.api.web import error_response, json_response, request
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 from .dynamic_state import STATE_END, STATE_START
-from .personality import Scope
+from .personality import Scope, scope_reason
 from .runtime import VERSION, Runtime
 from .schedule import (
     SCHEDULE_END,
@@ -23,11 +23,12 @@ from .schedule import (
     ScheduleStore,
     local_now,
     owner_identity,
+    signature,
 )
+from .schedule_planner import SchedulePlanner
 
 
 def event_scope(event: AstrMessageEvent) -> Scope:
-    """Use public host identities; never infer a bot identity from the UMO."""
     return Scope(
         origin=event.unified_msg_origin,
         platform_id=event.get_platform_id(),
@@ -41,45 +42,93 @@ class DigitalLifePersonality(Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context, config)
         self.config = config if config is not None else {}
-        data_root = Path(get_astrbot_plugin_data_path()) / "astrbot_plugin_digital_life_personality"
-        self.schedule_store = ScheduleStore(data_root / "schedule")
+        root = Path(get_astrbot_plugin_data_path()) / "astrbot_plugin_digital_life_personality"
+        self.schedule_store = ScheduleStore(root / "schedule")
         self.runtime = Runtime(self.config, self.schedule_store)
+        self.planner = SchedulePlanner(
+            self.schedule_store,
+            self._generate_schedule_text,
+            current_settings=lambda: self.runtime.settings,
+        )
         self._schedule_task: asyncio.Task | None = None
+        self._schedule_generation_key = ""
         self._last_error = ""
         if self.runtime.config_error:
             logger.warning(f"[DigitalLifePersonality] {self.runtime.config_error}")
-        register_web_api = getattr(context, "register_web_api", None)
-        if callable(register_web_api):
-            register_web_api(
-                "/astrbot_plugin_digital_life_personality/settings",
-                self.web_get_settings,
-                ["GET"],
-                "Read personality settings for the dashboard view",
-            )
-            register_web_api(
-                "/astrbot_plugin_digital_life_personality/settings",
-                self.web_save_settings,
-                ["POST"],
-                "Save personality settings from the dashboard view",
-            )
-            register_web_api(
-                "/astrbot_plugin_digital_life_personality/schedule",
-                self.web_get_schedule,
-                ["GET"],
-                "Read today's schedule",
-            )
-            register_web_api(
-                "/astrbot_plugin_digital_life_personality/schedule/generate",
-                self.web_generate_schedule,
-                ["POST"],
-                "Generate today's schedule",
-            )
-            register_web_api(
-                "/astrbot_plugin_digital_life_personality/schedule/update",
-                self.web_update_schedule,
-                ["POST"],
-                "Update today's schedule",
-            )
+        register = getattr(context, "register_web_api", None)
+        if callable(register):
+            for suffix, handler, methods, description in (
+                ("settings", self.web_get_settings, ["GET"], "Read personality settings"),
+                ("settings", self.web_save_settings, ["POST"], "Save personality settings"),
+                ("schedule", self.web_get_schedule, ["GET"], "Read today's schedule"),
+                (
+                    "schedule/providers",
+                    self.web_schedule_providers,
+                    ["GET"],
+                    "List chat model identifiers",
+                ),
+                (
+                    "schedule/generate",
+                    self.web_generate_schedule,
+                    ["POST"],
+                    "Generate today's schedule",
+                ),
+                ("schedule/update", self.web_update_schedule, ["POST"], "Edit today's schedule"),
+            ):
+                register(
+                    "/astrbot_plugin_digital_life_personality/" + suffix,
+                    handler,
+                    methods,
+                    description,
+                )
+
+    async def _default_schedule_provider(self):
+        resolver = getattr(self.context, "get_using_provider_async", None)
+        if not callable(resolver):
+            raise ScheduleError("provider_missing")
+        provider = await resolver()
+        if provider is None:
+            raise ScheduleError("provider_missing")
+        meta = provider.meta()
+        identifier = getattr(meta, "id", None)
+        if not isinstance(identifier, str) or not identifier:
+            raise ScheduleError("provider_missing")
+        return identifier
+
+    async def _generate_schedule_text(
+        self, provider_id: str, prompt: str, system_prompt: str, timeout: int
+    ):
+        identifier = provider_id or await self._default_schedule_provider()
+        providers = getattr(self.context, "get_all_providers", None)
+        if not callable(providers):
+            raise ScheduleError("provider_missing")
+        valid_ids = {getattr(provider.meta(), "id", "") for provider in providers()}
+        if identifier not in valid_ids:
+            raise ScheduleError("provider_missing")
+        generate = getattr(self.context, "llm_generate", None)
+        if not callable(generate):
+            raise ScheduleError("provider_missing")
+        # SDK text-only call: no ordinary chat history, tool execution, hooks,
+        # message sending or additional credentials in the planning request.
+        response = await asyncio.wait_for(
+            generate(
+                chat_provider_id=identifier,
+                prompt=prompt,
+                system_prompt=system_prompt,
+                contexts=[],
+                tools=None,
+                max_tokens=6000,
+            ),
+            timeout=timeout,
+        )
+        if getattr(response, "role", "assistant") != "assistant":
+            raise ScheduleError("invalid_model_response")
+        if getattr(response, "tools_call_name", None) or getattr(response, "tools_call_args", None):
+            raise ScheduleError("unexpected_tool_calls")
+        text = getattr(response, "completion_text", None)
+        if not isinstance(text, str) or not text.strip():
+            raise ScheduleError("empty_model_response")
+        return text, identifier
 
     async def initialize(self):
         await self._restart_schedule_task()
@@ -94,24 +143,35 @@ class DigitalLifePersonality(Star):
 
     async def _restart_schedule_task(self):
         await self._stop_schedule_task()
-        if self.runtime.schedule_available() and self.runtime.settings.schedule.auto_generate:
-            # Initialize today's plan immediately. No network/model call, no
-            # messages sent. Later checks also work when nobody is chatting.
-            self.runtime.schedule_today()
+        settings = self.runtime.settings
+        enabled = self.runtime.schedule_available()
+        generation_key = signature(settings.schedule, owner_identity(settings)) if enabled else ""
+        if generation_key != self._schedule_generation_key:
+            await self.planner.cancel()
+        self._schedule_generation_key = generation_key
+        if enabled and settings.schedule.auto_generate:
+            self._start_automatic_plan()
             self._schedule_task = asyncio.create_task(self._schedule_loop())
+
+    def _start_automatic_plan(self):
+        if (
+            not self.runtime.schedule_available()
+            or not self.runtime.settings.schedule.auto_generate
+        ):
+            return
+        try:
+            self.planner.start(self.runtime.settings)
+        except (ScheduleError, OSError):
+            self.runtime.schedule_error = "schedule_unavailable"
 
     async def _schedule_loop(self):
         while True:
             await asyncio.sleep(30)
-            if self.runtime.schedule_available():
-                self.runtime.schedule_today()
+            self._start_automatic_plan()
 
     @staticmethod
     def _web_config(config: Any) -> dict[str, Any]:
-        """Return a detached JSON-safe copy of the editable configuration."""
-        if not isinstance(config, dict):
-            return {}
-        return deepcopy(dict(config))
+        return deepcopy(dict(config)) if isinstance(config, dict) else {}
 
     def _web_summary(self) -> dict[str, Any]:
         return {
@@ -133,10 +193,7 @@ class DigitalLifePersonality(Star):
         if not request.username:
             return error_response("dashboard authentication required", status_code=401)
         return json_response(
-            {
-                "config": self._web_config(self.config),
-                "summary": self._web_summary(),
-            }
+            {"config": self._web_config(self.config), "summary": self._web_summary()}
         )
 
     async def web_save_settings(self):
@@ -167,26 +224,51 @@ class DigitalLifePersonality(Star):
         self.runtime = candidate_runtime
         await self._restart_schedule_task()
         return json_response(
-            {
-                "saved": True,
-                "config": self._web_config(self.config),
-                "summary": self._web_summary(),
-            }
+            {"saved": True, "config": self._web_config(self.config), "summary": self._web_summary()}
         )
+
+    async def web_schedule_providers(self):
+        if not request.username:
+            return error_response("dashboard authentication required", status_code=401)
+        result = []
+        try:
+            for provider in self.context.get_all_providers():
+                meta = provider.meta()
+                identifier = getattr(meta, "id", "")
+                model = getattr(meta, "model", "")
+                if isinstance(identifier, str) and identifier:
+                    result.append(
+                        {
+                            "id": identifier,
+                            "label": identifier
+                            + (" · " + model if isinstance(model, str) and model else ""),
+                        }
+                    )
+            default_id = await self._default_schedule_provider()
+        except Exception:
+            default_id = ""
+        return json_response({"providers": result, "default_id": default_id})
 
     def _schedule_payload(self) -> dict:
         today = self.runtime.schedule_today()
         current = self.runtime.schedule_current()
+        status = self.runtime.schedule_status()
+        if self.runtime.schedule_available() and not self.runtime.schedule_error:
+            try:
+                status = self.planner.status(self.runtime.settings)
+            except (ScheduleError, OSError):
+                status = {"enabled": True, "reason": "schedule_unavailable"}
         return {
             "config": self._web_config(self.config).get("schedule", {}),
             "today": today,
             "current": current,
-            "status": self.runtime.schedule_status(),
+            "status": status,
         }
 
     async def web_get_schedule(self):
         if not request.username:
             return error_response("dashboard authentication required", status_code=401)
+        # Read-only: polling never triggers another paid generation request.
         return json_response(self._schedule_payload())
 
     async def web_generate_schedule(self):
@@ -200,30 +282,37 @@ class DigitalLifePersonality(Star):
         revision = payload.get("revision")
         if revision is not None and not isinstance(revision, str):
             return error_response("invalid revision", status_code=400)
+        settings = self.runtime.settings
         if revision is not None and (
-            payload.get("date") != local_now(self.runtime.settings.schedule).date().isoformat()
-            or payload.get("timezone") != self.runtime.settings.schedule.timezone
+            payload.get("date") != local_now(settings.schedule).date().isoformat()
+            or payload.get("timezone") != settings.schedule.timezone
         ):
             return error_response(
                 "schedule date or timezone changed; reload today", status_code=409
             )
         try:
-            self.schedule_store.generate(
-                self.runtime.settings.schedule,
-                owner=owner_identity(self.runtime.settings),
-                revision=revision,
-                confirm=payload.get("confirm") is True,
+            status = self.planner.start(
+                settings, force=True, revision=revision, confirm=payload.get("confirm") is True
             )
         except ScheduleError as error:
-            status = (
-                409
-                if str(error) in ("revision_conflict", "manual_schedule_requires_confirmation")
-                else 400
+            code = str(error)
+            return error_response(
+                code,
+                status_code=409
+                if code in ("revision_conflict", "manual_schedule_requires_confirmation")
+                else 400,
             )
-            return error_response(str(error), status_code=status)
         except OSError:
             return error_response("schedule storage unavailable", status_code=503)
-        return json_response({"saved": True, **self._schedule_payload()})
+        return json_response(
+            {
+                "accepted": status.get("reason") == "generating",
+                "saved": settings.schedule.generation_mode == "template"
+                and status.get("reason") == "enabled",
+                **self._schedule_payload(),
+                "status": status,
+            }
+        )
 
     async def web_update_schedule(self):
         if not request.username:
@@ -236,18 +325,19 @@ class DigitalLifePersonality(Star):
         revision = payload.get("revision")
         if not isinstance(revision, str) or not revision:
             return error_response("reload the current schedule before editing", status_code=400)
+        settings = self.runtime.settings
         if (
-            payload.get("date") != local_now(self.runtime.settings.schedule).date().isoformat()
-            or payload.get("timezone") != self.runtime.settings.schedule.timezone
+            payload.get("date") != local_now(settings.schedule).date().isoformat()
+            or payload.get("timezone") != settings.schedule.timezone
         ):
             return error_response(
                 "schedule date or timezone changed; reload today", status_code=409
             )
         try:
             self.schedule_store.update_slots(
-                self.runtime.settings.schedule,
+                settings.schedule,
                 payload["slots"],
-                owner=owner_identity(self.runtime.settings),
+                owner=owner_identity(settings),
                 revision=revision,
             )
         except ScheduleError as error:
@@ -267,7 +357,6 @@ class DigitalLifePersonality(Star):
             schedule = self.runtime.schedule_context(scope)
             dynamic = self.runtime.dynamic_context(scope)
             if schedule and self.runtime.dynamic_summary()["reason"] in ("expired", "not_started"):
-                # An expired manual override must not negate a valid schedule.
                 dynamic = ""
             if dynamic:
                 contexts.append((STATE_START, STATE_END, dynamic))
@@ -303,11 +392,11 @@ class DigitalLifePersonality(Star):
 
     @filter.on_llm_request()
     async def apply_personality(self, event: AstrMessageEvent, req: ProviderRequest):
-        """Append stable character rules only to explicitly permitted private chats."""
         try:
             scope = event_scope(event)
             outcome = self.runtime.apply(req.system_prompt, scope)
-            # Build both changes before mutating either request field.
+            if self.runtime.settings and scope_reason(self.runtime.settings, scope) == "applied":
+                self._start_automatic_plan()
             state_parts = self._temporary_state_parts(req, scope, outcome.reason)
             if isinstance(outcome.prompt, str):
                 req.system_prompt = outcome.prompt
@@ -320,8 +409,6 @@ class DigitalLifePersonality(Star):
             else:
                 self._last_error = ""
         except Exception:
-            # asyncio cancellation and process termination are BaseException on
-            # the supported Python version and intentionally propagate.
             if self._last_error != "request_adapter_error":
                 logger.warning("[DigitalLifePersonality] request_adapter_error")
             self._last_error = "request_adapter_error"
@@ -329,9 +416,6 @@ class DigitalLifePersonality(Star):
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("人格状态")
     async def personality_status(self, event: AstrMessageEvent):
-        """查看当前会话的人格规则注入状态，仅限 AstrBot 管理员私聊。"""
-        # Explicitly protect configuration even if host command permissions are
-        # changed to allow everyone. True means DISABLE default LLM in v4.29.4.
         event.should_call_llm(True)
         event.stop_event()
         if not event.is_admin():
@@ -347,4 +431,5 @@ class DigitalLifePersonality(Star):
 
     async def terminate(self):
         await self._stop_schedule_task()
+        await self.planner.cancel()
         self.runtime.clear()

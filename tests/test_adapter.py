@@ -7,8 +7,8 @@ import sys
 import tempfile
 import types
 import unittest
-from datetime import UTC
-from unittest.mock import Mock, patch
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, Mock, patch
 
 from tests.support import PACKAGE, ROOT, load_plugin_module, valid_config
 
@@ -261,7 +261,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(plugin.runtime.settings.character.name, "测试角色")
 
     async def test_dynamic_part_is_temporary_and_replaced_on_retry_or_expiry(self):
-        from datetime import datetime, timedelta
+        from datetime import timedelta
 
         class TextPart:
             def __init__(self, *, text):
@@ -309,7 +309,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(req.extra_user_content_parts, [foreign])
 
     async def test_state_injection_failure_leaves_original_request_unchanged(self):
-        from datetime import datetime, timedelta
+        from datetime import timedelta
 
         now = datetime.now(UTC)
         config = valid_config(
@@ -349,6 +349,175 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(plugin.runtime, previous)
         self.assertNotIn("PRIVATE_DISK_ERROR", str(result))
 
+    @staticmethod
+    def model_context():
+        provider = types.SimpleNamespace(
+            meta=lambda: types.SimpleNamespace(id="test-model", model="test-model-name")
+        )
+
+        async def generate(**kwargs):
+            payload = json.loads(kwargs["prompt"].split("\n")[-1])
+            constraints = payload["constraints"]
+            slots = [
+                {
+                    "start": "00:00",
+                    "end": "07:30",
+                    "activity": "MODEL_SLEEP_A",
+                    "location": "HOME",
+                    "notes": "",
+                },
+                {
+                    "start": "07:30",
+                    "end": "09:00",
+                    "activity": "MODEL_MORNING_B",
+                    "location": "HOME",
+                    "notes": "",
+                },
+                {
+                    "start": "09:00",
+                    "end": "17:30",
+                    "activity": "MODEL_WORK_C",
+                    "location": "OFFICE",
+                    "notes": "",
+                },
+                {
+                    "start": "17:30",
+                    "end": "23:00",
+                    "activity": "MODEL_EVENING_D",
+                    "location": "HOME",
+                    "notes": "",
+                },
+                {
+                    "start": "23:00",
+                    "end": "24:00",
+                    "activity": "MODEL_SLEEP_E",
+                    "location": "HOME",
+                    "notes": "",
+                },
+            ]
+            return types.SimpleNamespace(
+                role="assistant",
+                completion_text=json.dumps(
+                    {
+                        "date": constraints["date"],
+                        "timezone": constraints["timezone"],
+                        "slots": slots,
+                    }
+                ),
+                tools_call_name=[],
+                tools_call_args=[],
+            )
+
+        return types.SimpleNamespace(
+            get_all_providers=lambda: [provider],
+            get_using_provider_async=AsyncMock(return_value=provider),
+            llm_generate=AsyncMock(side_effect=generate),
+        )
+
+    async def test_model_schedule_uses_sdk_and_queries_never_repeat_paid_call(self):
+        context = self.model_context()
+        plugin = self.plugin_type(context, valid_config(schedule={"enabled": True}))
+        try:
+            await plugin.initialize()
+            self.assertIsNotNone(plugin.planner.task)
+            await plugin.planner.task
+            self.assertEqual(context.llm_generate.await_count, 1)
+            kwargs = context.llm_generate.call_args.kwargs
+            self.assertEqual(kwargs["chat_provider_id"], "test-model")
+            self.assertEqual(kwargs["contexts"], [])
+            self.assertIsNone(kwargs["tools"])
+            self.assertNotIn("func_tool", kwargs)
+            for _ in range(3):
+                response = await plugin.web_get_schedule()
+                self.assertEqual(response["status"]["reason"], "enabled")
+                self.assertEqual(response["today"]["generation_mode"], "llm")
+                self.assertEqual(response["today"]["slots"][0]["activity"], "MODEL_SLEEP_A")
+            plugin._start_automatic_plan()
+            self.assertEqual(context.llm_generate.await_count, 1)
+            self.assertTrue(
+                all(slot["source"] == "llm" for slot in plugin.schedule_store.load()["slots"])
+            )
+        finally:
+            await plugin.terminate()
+
+    async def test_save_model_configuration_returns_before_generation_and_disabling_cancels(self):
+        class StoredConfig(dict):
+            def save_config(self):
+                pass
+
+        context = self.model_context()
+        waiting = asyncio.Event()
+
+        async def slow(**kwargs):
+            await waiting.wait()
+
+        context.llm_generate.side_effect = slow
+        plugin = self.plugin_type(context, StoredConfig(valid_config()))
+        candidate = valid_config(schedule={"enabled": True})
+
+        async def body(default=None):
+            return candidate
+
+        self.web_request.json = body
+        try:
+            result = await asyncio.wait_for(plugin.web_save_settings(), timeout=1)
+            self.assertTrue(result["saved"])
+            self.assertEqual(plugin._schedule_payload()["status"]["reason"], "generating")
+            task = plugin.planner.task
+            await asyncio.sleep(0)
+            candidate = valid_config(schedule={"enabled": False})
+            await plugin.web_save_settings()
+            self.assertTrue(task.cancelled())
+            self.assertEqual(plugin._schedule_payload()["status"]["reason"], "disabled")
+            self.assertFalse(plugin.schedule_store.path.exists())
+        finally:
+            await plugin.terminate()
+
+    async def test_provider_listing_exposes_only_chat_model_identifiers(self):
+        context = self.model_context()
+        context.provider_config = {"api_key": "SHOULD_NOT_LEAK"}
+        plugin = self.plugin_type(context, valid_config())
+        result = await plugin.web_schedule_providers()
+        self.assertEqual(result["default_id"], "test-model")
+        self.assertEqual(result["providers"][0]["id"], "test-model")
+        self.assertNotIn("SHOULD_NOT_LEAK", str(result))
+        self.web_request.username = None
+        self.assertEqual((await plugin.web_schedule_providers())["status_code"], 401)
+
+    async def test_missing_model_has_clear_failure_and_no_fixed_activity_fallback(self):
+        plugin = self.plugin_type(object(), valid_config(schedule={"enabled": True}))
+        try:
+            await plugin.initialize()
+            await plugin.planner.task
+            result = await plugin.web_get_schedule()
+            self.assertIsNone(result["today"])
+            self.assertEqual(result["status"]["reason"], "provider_missing")
+            self.assertFalse(plugin.schedule_store.path.exists())
+            req = self.request()
+            await plugin.apply_personality(EventDouble(), req)
+            self.assertIn("测试角色", req.system_prompt)
+        finally:
+            await plugin.terminate()
+
+    async def test_non_text_model_response_cannot_turn_into_a_schedule(self):
+        context = self.model_context()
+        context.llm_generate.side_effect = None
+        context.llm_generate.return_value = types.SimpleNamespace(
+            role="assistant",
+            completion_text="{}",
+            tools_call_name=["unwanted"],
+            tools_call_args=[{}],
+        )
+        plugin = self.plugin_type(context, valid_config(schedule={"enabled": True}))
+        try:
+            await plugin.initialize()
+            await plugin.planner.task
+            self.assertFalse(plugin.schedule_store.path.exists())
+            self.assertTrue(plugin._schedule_payload()["status"]["last_error"])
+            self.assertEqual(context.llm_generate.await_count, 1)
+        finally:
+            await plugin.terminate()
+
     async def test_schedule_enabling_creates_today_and_disable_cancels_background_task(self):
         class StoredConfig(dict):
             def save_config(self):
@@ -358,7 +527,13 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         await plugin.initialize()
         self.assertIsNone(plugin._schedule_task)
         self.assertFalse(plugin.schedule_store.path.exists())
-        candidate = valid_config(schedule={"enabled": True, "work_location": "LIBRARY"})
+        candidate = valid_config(
+            schedule={
+                "enabled": True,
+                "generation_mode": "template",
+                "template_lines": ["00:00-24:00 | TEMPLATE | LIBRARY"],
+            }
+        )
 
         async def body(default=None):
             return candidate
@@ -393,7 +568,13 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["status_code"], 401)
 
     async def test_schedule_edit_revision_conflict_and_manual_lock(self):
-        config = valid_config(schedule={"enabled": True})
+        config = valid_config(
+            schedule={
+                "enabled": True,
+                "generation_mode": "template",
+                "template_lines": ["00:00-24:00 | TEMPLATE | HERE"],
+            }
+        )
         plugin = self.plugin_type(object(), config)
         plan = plugin.runtime.schedule_today()
         payload = {
@@ -433,7 +614,16 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(regenerated["today"]["manual_override"])
 
     async def test_yesterday_editor_is_rejected_even_with_current_revision(self):
-        plugin = self.plugin_type(object(), valid_config(schedule={"enabled": True}))
+        plugin = self.plugin_type(
+            object(),
+            valid_config(
+                schedule={
+                    "enabled": True,
+                    "generation_mode": "template",
+                    "template_lines": ["00:00-24:00 | TEMPLATE | HERE"],
+                }
+            ),
+        )
         plan = plugin.runtime.schedule_today()
 
         async def body(default=None):

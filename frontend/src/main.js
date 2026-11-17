@@ -54,9 +54,10 @@ const blankConfig = () => ({
   },
   schedule: {
     enabled: false, auto_generate: true, timezone: "Asia/Shanghai",
-    generation_rule: "根据角色职业、常住地和作息生成；模板为可选固定安排。",
+    generation_rule: "结合角色身份、性格、兴趣和近期背景生成自然且有变化的今日生活安排，遵守作息与固定时段。",
     template_lines: [], allow_manual_override: true, max_segments: 12,
-    generation_mode: "persona", wake_time: "07:30", sleep_time: "23:00",
+    generation_mode: "llm", provider_id: "", model_timeout: 90, retry_cooldown: 900,
+    wake_time: "07:30", sleep_time: "23:00",
     work_start: "09:00", work_end: "17:30", workdays: ["1", "2", "3", "4", "5"],
     work_location: "", home_location: "",
   },
@@ -124,6 +125,36 @@ function mergeDeep(target, source) {
   return target;
 }
 
+function normalizeScheduleMode(config) {
+  if (config.schedule?.generation_mode === "persona") {
+    config.schedule.generation_mode = "llm";
+    if (["按模板生成；不凭空添加未配置的现实事件。", "根据角色职业、常住地和作息生成；模板为可选固定安排。"].includes(config.schedule.generation_rule)) {
+      config.schedule.generation_rule = blankConfig().schedule.generation_rule;
+    }
+  }
+  return config;
+}
+
+function generationStatus(status = {}) {
+  const labels = {
+    enabled: "已就绪", generating: "模型正在生成今日日程", not_generated: "尚未生成今日安排",
+    cooldown: "生成暂处于重试冷却", daily_limit: "今日自动尝试次数已达上限，可检查模型后手动重试", generation_failed: "日程生成失败", provider_missing: "未找到可用的生成模型",
+    schedule_unavailable: "日程数据暂不可用", disabled: "日程模块未启用", read_failed: "读取日程失败",
+  };
+  const errors = {
+    provider_missing: "请在生成设置中选择可用模型，或配置宿主默认模型。",
+    model_timeout: "模型生成超时。", timeout: "模型生成超时。", invalid_json: "模型返回的格式无法解析。",
+    invalid_schedule: "模型返回的日程未通过校验。", generation_failed: "模型请求或日程校验失败。",
+  };
+  const retry = status.next_retry_at && Number.isFinite(Date.parse(status.next_retry_at))
+    ? new Date(status.next_retry_at).toLocaleString() : "";
+  const code = typeof status.last_error === "string" ? status.last_error : "";
+  return {
+    title: labels[status.reason] || "日程状态待确认",
+    detail: `${errors[code] || (code ? `错误代码：${code}` : "")}${retry ? ` 下一次可重试：${retry}` : ""}`.trim(),
+  };
+}
+
 const PERSONA_SECTIONS = [
   "identity_control", "profile", "background", "personality", "behavior",
   "relationship", "speech", "response", "roleplay", "boundaries", "examples",
@@ -161,7 +192,7 @@ const descriptions = {
 };
 
 const options = {
-  generation_mode: [["persona", "根据角色与作息生成"], ["template", "固定模板"]],
+  generation_mode: [["llm", "模型生成"], ["template", "用户固定模板"]],
   source: [["manual", "人工填写"], ["confirmed_event", "已确认事件（需人工确认）"]],
   age_mode: [["fixed", "固定年龄"], ["growing", "随时间增长"], ["timeline", "角色时间线"]],
   changeability: [["stable", "稳定"], ["influenced", "容易受影响"], ["adaptive", "随关系变化"]],
@@ -196,9 +227,12 @@ const fieldGroups = {
     ["enabled", "启用日程模块", "checkbox", "启用并保存后生成今日模拟安排；适用范围使用插件会话和机器人白名单。"],
     ["auto_generate", "每天自动生成", "checkbox", "当天没有日程时自动生成一次；不自动覆盖已保存日程。"],
     ["timezone", "日程时区", "text", "例如 Asia/Shanghai。"],
-    ["generation_mode", "生成方式", "select", "按角色与作息生成，或直接使用固定模板。"],
-    ["generation_rule", "生成规则", "textarea", "说明角色生活安排的偏好和限制，不执行现实动作。"],
-    ["template_lines", "可选固定安排 / 模板", "list", "每行：HH:MM-HH:MM | 活动 | 地点 | 备注；单段不跨午夜，结束可用24:00。"],
+    ["generation_mode", "生成方式", "select", "由模型规划今日活动，或使用你填写的固定模板；模型失败不会回退为规则排表。"],
+    ["provider_id", "日程生成模型", "provider", "留空使用宿主默认模型；只显示模型标识，不显示密钥。"],
+    ["model_timeout", "模型生成超时（秒）", "number", "10～180秒；生成在后台进行，不阻塞配置保存。"],
+    ["retry_cooldown", "失败重试冷却（秒）", "number", "60～86400秒；失败不会每条消息重新调用模型。"],
+    ["generation_rule", "模型生成要求", "textarea", "直接提供给模型的生活偏好和规划要求；作息与固定时段作为约束。"],
+    ["template_lines", "可选固定安排 / 模板", "list", "每行：HH:MM-HH:MM | 活动 | 地点 | 备注；模型模式下作为固定约束，模板模式下为完整安排。"],
     ["wake_time", "起床时间", "time", "用于角色作息安排。"],
     ["sleep_time", "睡觉时间", "time", "用于角色作息安排。"],
     ["work_start", "工作开始", "time", "工作日的开始时间。"],
@@ -331,7 +365,7 @@ function stateSummary(saved, now) {
   };
 }
 
-function renderField(config, group, field) {
+function renderField(config, group, field, providers = []) {
   const [key, label, type, hint] = field;
   const model = fieldModel(config, group, key);
   if (type === "checkbox") {
@@ -350,12 +384,24 @@ function renderField(config, group, field) {
       h("span", label),
       h("input", {
         id: `${group}-${key}`, type, step: type === "number" ? 1 : 60,
-        min: type === "number" ? 1 : undefined,
+        min: type === "number" ? key === "model_timeout" ? 10 : key === "retry_cooldown" ? 60 : 1 : undefined,
+        max: type === "number" ? key === "model_timeout" ? 180 : key === "retry_cooldown" ? 86400 : key === "max_segments" ? 32 : undefined : undefined,
         value: model.value,
         onInput: (event) => {
           model.value = type === "number" ? event.target.valueAsNumber : event.target.value;
         },
       }),
+      h("small", hint),
+    ]);
+  }
+  if (type === "provider") {
+    return h("label", { class: "field wide", key }, [
+      h("span", label),
+      h("input", { id: "schedule-provider-id", type: "text", list: "schedule-provider-options",
+        placeholder: "宿主默认模型", value: model.value || "",
+        onInput: (event) => { model.value = event.target.value; } }),
+      h("datalist", { id: "schedule-provider-options" }, providers.map((provider) =>
+        h("option", { key: provider.id, value: provider.id }, provider.label || provider.id))),
       h("small", hint),
     ]);
   }
@@ -430,6 +476,8 @@ function useAppState() {
     active.value = module === "persona" ? lastPersonaSection.value
       : module === "schedule" ? "schedule_timeline"
       : module === "state" ? "dynamic_state" : "general";
+    if (module === "schedule") loadSchedule({ preserveDraft: true, background: true });
+    else stopSchedulePoll();
   }
   function selectSection(section) {
     if (activeModule.value === "persona" && PERSONA_SECTIONS.includes(section)) {
@@ -452,7 +500,11 @@ function useAppState() {
   const scheduleEditingIndex = ref(null);
   const scheduleDirty = ref(false);
   const scheduleStatus = ref({});
-  const scheduleSavedConfig = ref({ enabled: false, auto_generate: false, generation_mode: "persona" });
+  const scheduleSavedConfig = ref({ enabled: false, auto_generate: false, generation_mode: "llm" });
+  const scheduleProviders = ref([]);
+  const scheduleDefaultProvider = ref("");
+  const scheduleProvidersError = ref("");
+  const scheduleConflict = ref(false);
   const scheduleTimezone = ref("Asia/Shanghai");
   const sections = Object.keys(fieldGroups);
   const clock = ref(Date.now());
@@ -461,14 +513,32 @@ function useAppState() {
     if (!summary.enabled) return { ...current, reason: "plugin_disabled", slot: null };
     if (!scheduleLoaded.value) return { ...current, reason: scheduleStatus.value.reason === "read_failed" ? "unavailable" : "loading", slot: null };
     if (!scheduleSavedConfig.value.enabled || scheduleStatus.value.reason === "disabled") return { ...current, reason: "disabled", slot: null };
-    if (scheduleStatus.value.reason && !["enabled", "active"].includes(scheduleStatus.value.reason)) return { ...current, reason: "unavailable", slot: null };
+    if (["schedule_unavailable", "read_failed"].includes(scheduleStatus.value.reason)) return { ...current, reason: "unavailable", slot: null };
     return current;
   });
-  const canGenerate = computed(() => loaded.value && scheduleLoaded.value && summary.enabled && scheduleSavedConfig.value.enabled && config.schedule.enabled && !scheduleBusy.value && !busy.value && !["unavailable", "different_day"].includes(scheduleCurrent.value.reason));
-  const canEditSchedule = computed(() => canGenerate.value && config.schedule.allow_manual_override && Boolean(scheduleToday.value));
+  const generationBlocked = computed(() => {
+    const status = scheduleStatus.value;
+    const retry = Date.parse(status.next_retry_at || "");
+    return status.reason === "generating" || (Number.isFinite(retry) && retry > clock.value);
+  });
+  const canGenerate = computed(() => loaded.value && scheduleLoaded.value && summary.enabled && scheduleSavedConfig.value.enabled && config.schedule.enabled && !scheduleBusy.value && !busy.value && !generationBlocked.value && !["unavailable", "different_day"].includes(scheduleCurrent.value.reason));
+  const canEditSchedule = computed(() => loaded.value && scheduleLoaded.value && summary.enabled && scheduleSavedConfig.value.enabled && config.schedule.enabled && !scheduleBusy.value && !busy.value && config.schedule.allow_manual_override && Boolean(scheduleToday.value) && !["unavailable", "different_day"].includes(scheduleCurrent.value.reason));
   const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "浏览器本地时区";
   const dynamicStatus = computed(() => stateSummary(summary.dynamic_state, clock.value));
   let clockTimer;
+  let schedulePollTimer;
+  let scheduleReadBusy = false;
+  let disposed = false;
+  function stopSchedulePoll() {
+    clearTimeout(schedulePollTimer);
+    schedulePollTimer = undefined;
+  }
+  function syncSchedulePoll() {
+    stopSchedulePoll();
+    if (!disposed && activeModule.value === "schedule" && scheduleStatus.value.reason === "generating") {
+      schedulePollTimer = setTimeout(() => loadSchedule({ preserveDraft: true, background: true }), 2000);
+    }
+  }
   function setValidity(minutes) {
     const now = new Date();
     config.dynamic_state.updated_at = now.toISOString();
@@ -521,39 +591,72 @@ function useAppState() {
     messageKind.value = "error";
   }
 
-  async function loadSchedule({ discardDraft = false, preserveDraft = false } = {}) {
+  function applyScheduleResult(result, { preserveDraft = false } = {}) {
+    if (!Object.hasOwn(result, "today") || !result.status || !result.config) {
+      throw new Error("日程响应缺少配置或今日数据");
+    }
+    if (result.today !== null && (!result.today || !Array.isArray(result.today.slots))) {
+      throw new Error("日程时间段数据无效");
+    }
+    const previousReason = scheduleStatus.value.reason;
+    const previousRevision = scheduleToday.value?.revision;
+    if (preserveDraft && scheduleDirty.value) {
+      scheduleConflict.value = Boolean(result.today?.revision !== scheduleToday.value?.revision);
+    } else {
+      scheduleToday.value = result.today;
+      scheduleDraft.value = (result.today?.slots || []).map((slot) => ({ ...slot }));
+      scheduleDraftOrigins.value = (result.today?.slots || []).map((_, index) => index);
+      scheduleEditingIndex.value = null;
+      scheduleDirty.value = false;
+      scheduleConflict.value = false;
+    }
+    scheduleTimezone.value = result.today?.timezone || result.config.timezone || "Asia/Shanghai";
+    scheduleSavedConfig.value = normalizeScheduleMode({ schedule: { ...result.config } }).schedule;
+    scheduleStatus.value = result.status;
+    scheduleLoaded.value = true;
+    if (previousReason === "generating" && result.status.reason !== "generating" && result.today?.generation_mode === "llm" && result.today.revision !== previousRevision) {
+      message.value = scheduleConflict.value
+        ? "模型已生成新日程；手动草稿保留原版本，请处理冲突后重新读取。"
+        : "模型已生成今日日程并完成校验，时间线已更新。";
+      messageKind.value = scheduleConflict.value ? "error" : "ok";
+    }
+  }
+
+  async function loadSchedule({ discardDraft = false, preserveDraft = false, background = false } = {}) {
+    if (scheduleReadBusy || disposed) return false;
     if (scheduleDirty.value && !discardDraft && !preserveDraft) {
       if (!window.confirm("重新读取会丢弃未保存的今日日程草稿，继续吗？")) return false;
     }
-    scheduleLoaded.value = false;
+    scheduleReadBusy = true;
+    if (!background) scheduleLoaded.value = false;
     try {
       await connect();
       const result = unwrapResponse(await withTimeout(bridge.apiGet("schedule"), "读取今日日程超时"));
-      if (!Object.hasOwn(result, "today") || !result.status || !result.config) {
-        throw new Error("日程响应缺少配置或今日数据");
-      }
-      if (result.today !== null && (!result.today || !Array.isArray(result.today.slots))) {
-        throw new Error("日程时间段数据无效");
-      }
-      if (!preserveDraft || !scheduleDirty.value) {
-        scheduleToday.value = result.today;
-        scheduleDraft.value = (result.today?.slots || []).map((slot) => ({ ...slot }));
-        scheduleDraftOrigins.value = (result.today?.slots || []).map((_, index) => index);
-        scheduleEditingIndex.value = null;
-        scheduleDirty.value = false;
-      }
-      // Keep the original revision with an unsaved draft so the backend can
-      // reject a concurrent edit instead of silently overwriting it.
-      scheduleTimezone.value = result.today?.timezone || result.config.timezone || "Asia/Shanghai";
-      scheduleSavedConfig.value = { ...result.config };
-      scheduleStatus.value = result.status;
-      scheduleLoaded.value = true;
+      if (disposed) return false;
+      applyScheduleResult(result, { preserveDraft });
       return true;
     } catch (error) {
-      // Keep any draft so network or concurrency failures never erase manual work.
-      scheduleStatus.value = { enabled: false, reason: "read_failed" };
-      showError("读取日程失败", error);
+      if (!disposed) {
+        scheduleStatus.value = { enabled: false, reason: "read_failed" };
+        showError("读取日程失败", error);
+      }
       return false;
+    } finally {
+      scheduleReadBusy = false;
+      syncSchedulePoll();
+    }
+  }
+
+  async function loadProviders() {
+    try {
+      const result = unwrapResponse(await withTimeout(bridge.apiGet("schedule/providers"), "读取模型列表超时"));
+      if (!Array.isArray(result.providers)) throw new Error("模型列表格式无效");
+      scheduleProviders.value = result.providers.filter((item) => item && typeof item.id === "string")
+        .map((item) => ({ id: item.id, label: typeof item.label === "string" ? item.label : item.id }));
+      scheduleDefaultProvider.value = typeof result.default_id === "string" ? result.default_id : "";
+      scheduleProvidersError.value = "";
+    } catch {
+      scheduleProvidersError.value = "模型列表暂时无法读取；可保留空值使用宿主默认模型，或手填模型标识。";
     }
   }
 
@@ -580,12 +683,25 @@ function useAppState() {
         body.date = existing.date;
         body.timezone = existing.timezone;
       }
-      unwrapResponse(await withTimeout(bridge.apiPost("schedule/generate", body), "生成日程超时"));
-      const reloaded = await loadSchedule({ discardDraft: true });
-      if (reloaded) {
-        message.value = "今日日程已生成并重新读取。";
-        messageKind.value = "ok";
+      const result = unwrapResponse(await withTimeout(bridge.apiPost("schedule/generate", body), "提交日程生成超时"));
+      if (!result.accepted && !result.saved) {
+        if (!result.status) throw new Error("服务端未确认日程生成请求");
+        applyScheduleResult({ ...result, config: result.config || scheduleSavedConfig.value }, { preserveDraft: true });
+        message.value = `未发起新的模型请求：${generationStatus(result.status).title}。请查看生成状态与重试时间。`;
+        messageKind.value = "error";
+        syncSchedulePoll();
+        return;
       }
+      applyScheduleResult({ ...result, config: result.config || scheduleSavedConfig.value }, { preserveDraft: true });
+      if (result.accepted) {
+        message.value = result.status?.reason === "generating"
+          ? "生成请求已受理，模型正在后台规划今日日程；页面将自动读取结果。"
+          : `生成请求已受理：${generationStatus(result.status).title}。`;
+      } else {
+        message.value = "固定模板日程已保存。";
+      }
+      messageKind.value = "ok";
+      syncSchedulePoll();
     } catch (error) { showError("生成日程失败", error); }
     finally { scheduleBusy.value = false; }
   }
@@ -689,11 +805,12 @@ function useAppState() {
       if (!result.config || typeof result.config !== "object" || Array.isArray(result.config) || !result.summary) {
         throw new Error("配置响应缺少 config / summary，未采用空白表单");
       }
-      mergeDeep(config, result.config);
+      mergeDeep(config, normalizeScheduleMode(result.config));
       Object.assign(summary, result.summary);
       loadedSnapshot.value = JSON.stringify(config);
       loaded.value = true;
       await loadSchedule();
+      loadProviders();
     } catch (error) { showError("读取配置失败", error); }
   }
 
@@ -708,14 +825,18 @@ function useAppState() {
         bridge.apiPost("settings", payload), "保存超时，请确认插件仍已启用后重试",
       ));
       if (!result.saved || !result.config || !result.summary) throw new Error("服务端未确认配置保存成功");
-      mergeDeep(config, result.config);
+      mergeDeep(config, normalizeScheduleMode(result.config));
       Object.assign(summary, result.summary);
       loadedSnapshot.value = JSON.stringify(config);
       const hadDraft = scheduleDirty.value;
       if (await loadSchedule({ preserveDraft: true })) {
-        message.value = hadDraft
-          ? "设置已保存并重新读取日程；手动草稿和原版本保留，请再保存今日。"
-          : "设置已保存，新请求立即生效；今日日程已重新读取。";
+        const status = scheduleStatus.value;
+        message.value = status.reason === "generating"
+          ? "设置已保存，日程正在生成；生成完成前继续保留已有有效安排。"
+          : ["cooldown", "generation_failed", "provider_missing", "daily_limit"].includes(status.reason)
+            ? `设置已保存；${generationStatus(status).title}，请查看时间线中的原因和重试时间。`
+            : hadDraft ? "设置已保存并重新读取日程；手动草稿和原版本保留，请再保存今日。"
+              : "设置已保存，新请求立即生效；已读取日程状态。";
         messageKind.value = "ok";
       }
     } catch (error) { showError("保存失败", error); }
@@ -726,7 +847,7 @@ function useAppState() {
     load();
     clockTimer = setInterval(() => { clock.value = Date.now(); }, 1000);
   });
-  onUnmounted(() => { clearInterval(clockTimer); });
+  onUnmounted(() => { disposed = true; clearInterval(clockTimer); stopSchedulePoll(); });
 
   return {
     config, summary, active, activeModule, visibleSections, selectModule, selectSection,
@@ -734,7 +855,8 @@ function useAppState() {
     sessionsText, botsText, relationFilled, save,
     dynamicStatus, browserTimezone, setValidity, scheduleToday, scheduleCurrent, scheduleBusy, generateSchedule,
     loaded, scheduleLoaded, scheduleDraft, scheduleDraftOrigins, scheduleEditingIndex,
-    scheduleDirty, scheduleStatus, scheduleSavedConfig,
+    scheduleDirty, scheduleStatus, scheduleSavedConfig, scheduleConflict,
+    scheduleProviders, scheduleDefaultProvider, scheduleProvidersError,
     canGenerate, canEditSchedule, loadSchedule, editSlot, addSlot, deleteSlot, saveToday,
     openSlot, closeSlot, cancelSlot, restoreSlot,
   };
@@ -779,9 +901,12 @@ function renderScheduleEditor(state) {
 function renderSchedule(state) {
   const { config, loaded, busy, scheduleToday, scheduleCurrent, scheduleBusy,
     scheduleLoaded, scheduleDraft, scheduleDraftOrigins, scheduleEditingIndex, scheduleDirty,
-    scheduleStatus, scheduleSavedConfig, canGenerate, canEditSchedule, loadSchedule, generateSchedule,
+    scheduleStatus, scheduleSavedConfig, scheduleConflict, canGenerate, canEditSchedule, loadSchedule, generateSchedule,
     openSlot, restoreSlot, addSlot, saveToday, selectSection } = state;
   const today = scheduleToday.value;
+  const generation = generationStatus(scheduleStatus.value);
+  const generating = scheduleStatus.value.reason === "generating";
+  const generationError = Boolean(scheduleStatus.value.last_error) || ["generation_failed", "provider_missing", "cooldown", "daily_limit"].includes(scheduleStatus.value.reason);
   const current = scheduleCurrent.value;
   const usable = ["active", "gap"].includes(current.reason);
   const title = current.reason === "plugin_disabled" ? "插件未启用"
@@ -790,6 +915,8 @@ function renderSchedule(state) {
     : current.reason === "unavailable" ? "暂时无法读取日程"
     : current.reason === "different_day" ? "这份安排已跨日，请重新读取"
     : current.reason === "invalid_timezone" ? "日程时区无效"
+    : !today && generating ? "模型正在生成今日日程"
+    : !today && generationError ? generation.title
     : current.slot ? `${current.slot.activity} · ${current.slot.location || "未填写位置"}`
     : "当前没有匹配时段";
   const reasonNote = current.reason === "plugin_disabled" ? "请先在通用设置启用插件，再保存日程生成设置。"
@@ -815,15 +942,26 @@ function renderSchedule(state) {
         today && current.date && today.date !== current.date ? h("small", { class: "timeline-stale-note" }, "这份数据不属于今天，仅供查看；没有标记任何当前活动。") : null,
         h("strong", { id: "schedule-current", role: "status", "aria-live": "polite" }, title),
         h("p", reasonNote),
-        h("small", `服务状态：${scheduleStatus.value.reason || (scheduleLoaded.value ? "已读取" : "尚未读取")}`),
-        today ? h("small", today.manual_override ? "内容来源：已保存的人工调整" : `内容来源：${today.generation_mode === "template" ? "固定模板生成" : "角色与作息自动生成"}`)
+        h("small", `生成状态：${generation.title}`),
+        today ? h("small", today.manual_override ? "内容来源：已保存的人工调整"
+          : today.generation_mode === "llm" ? `内容来源：模型生成${today.provider_id || scheduleStatus.value.provider_id ? ` · ${today.provider_id || scheduleStatus.value.provider_id}` : ""}`
+            : today.generation_mode === "template" ? "内容来源：用户固定模板" : "内容来源：旧版规则安排（可重新生成模型日程）")
           : h("small", `每天自动生成（已保存）：${scheduleSavedConfig.value.auto_generate ? "开启" : "关闭"}`),
       ]),
+      generating || generationError ? h("div", { id: "schedule-generation-status", class: `schedule-generation-status ${generationError ? "has-error" : "is-generating"}`, role: "status", "aria-live": "polite" }, [
+        h("b", generating ? "模型正在生成今日日程" : "上次生成未成功"),
+        h("p", generation.detail || (generating ? "生成在后台进行；本页每2秒只读查询进度，不会重复请求生成。已有有效日程继续使用。" : "请检查模型设置后重试；已有有效日程不会被规则排表替换。")),
+        h("small", "模型调用可能产生费用。通常每日生成一次，不在每条消息时调用。"),
+      ]) : null,
+      scheduleConflict.value ? h("div", { id: "schedule-draft-conflict", class: "schedule-generation-status has-error", role: "status" }, [
+        h("b", "后台日程已更新，手动草稿仍保留原版本"),
+        h("p", "为防止覆盖新安排，继续保存会进行版本校验。请先复制需要保留的修改，再重新读取最新时间线。"),
+      ]) : null,
       h("div", { class: "validity-actions schedule-timeline-toolbar" }, [
         h("button", { id: "schedule-reload", type: "button", disabled: scheduleBusy.value || busy.value || !loaded.value,
           onClick: () => loadSchedule() }, "重新读取"),
         h("button", { id: "schedule-generate", type: "button", disabled: !canGenerate.value,
-          onClick: generateSchedule }, scheduleBusy.value ? "处理中…" : today ? "重新生成今日安排" : "生成今日安排"),
+          onClick: generateSchedule }, generating ? "模型生成中…" : scheduleBusy.value ? "处理中…" : today ? "重新生成今日安排" : "生成今日安排"),
         h("button", { id: "schedule-open-settings", type: "button", class: "timeline-text-button",
           onClick: () => selectSection("schedule_settings") }, "前往生成设置"),
       ]),
@@ -881,16 +1019,18 @@ function renderSchedule(state) {
 }
 
 function renderScheduleSettings(state) {
-  const { config, selectSection } = state;
+  const { config, selectSection, scheduleProviders, scheduleDefaultProvider, scheduleProvidersError } = state;
   return h("section", { class: "panel detail schedule-settings-panel", "data-section": "schedule_settings" }, [
     h("div", { class: "panel-title" }, [h("div", [h("h2", "生成设置"),
       h("p", "这里只配置自动生成方式。今日活动与位置请在“今日时间线”查看，不需要手工逐段创建。")])]),
     h("div", { class: "schedule-settings-intro" }, [
-      h("p", "启用日程与每天自动生成，设置作息后点击页面底部“保存全部配置”。后端将生成今日安排；自动生成的内容可在时间线中查看。"),
+      h("p", "启用日程与每天自动生成，保存后由所选模型结合角色资料和生成要求规划今日活动。通常每日调用一次，可能产生费用；不是每条消息都调用。生成失败保留已有有效计划，不回退为硬编码作息或固定模板。"),
+      h("small", `宿主默认模型：${scheduleDefaultProvider.value || "未配置或尚未获取"}。留空模型标识时使用该默认值。`),
+      scheduleProvidersError.value ? h("p", { class: "provider-list-error", role: "status" }, scheduleProvidersError.value) : null,
       h("button", { id: "schedule-open-timeline", type: "button", class: "timeline-edit-button",
         onClick: () => selectSection("schedule_timeline") }, "查看今日时间线"),
     ]),
-    h("div", { class: "field-grid" }, fieldGroups.schedule.map((field) => renderField(config, "schedule", field))),
+    h("div", { class: "field-grid" }, fieldGroups.schedule.map((field) => renderField(config, "schedule", field, scheduleProviders.value))),
   ]);
 }
 function renderIdentityControl(config) {
