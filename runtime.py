@@ -18,7 +18,7 @@ from .personality import (
 from .schedule import ScheduleError, ScheduleStore, build_schedule_context, owner_identity
 from .settings import ConfigError, Settings
 
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 DIAGNOSTIC_CAPACITY = 128
 
 

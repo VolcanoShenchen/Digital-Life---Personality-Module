@@ -1,6 +1,6 @@
 # General_purpose_personality_plugin
 
-AstrBot 私聊人格与表达插件，预览版本 `0.4.0`。
+AstrBot 私聊人格与表达插件，预览版本 `0.4.1`。
 
 通过 AstrBot 正常聊天请求加入结构化角色资料、情境行为、语言习惯和回复策略，复用宿主的模型、历史、工具和消息发送。当前目标平台为 NapCat 经 AstrBot `aiocqhttp` 适配器接入的 QQ 私聊。
 
@@ -30,7 +30,7 @@ AstrBot 私聊人格与表达插件，预览版本 `0.4.0`。
 
 ## 配置入口
 
-在 AstrBot WebUI 的插件详情中打开 `settings` 视图。页面按区域组织全部字段，保存时严格校验；详见 [配置 WebUI](docs/WEBUI.md)。
+在 AstrBot WebUI 的插件详情中打开 `settings` 视图。先选择一级入口“人格模块”“日程模块”“当前状态”或“通用设置”；人格模块内再选择身份、性格、表达等子页。模块切换保留草稿，底部“保存全部配置”统一保存各模块设置。详见 [配置 WebUI](docs/WEBUI.md)。
 
 也可使用 AstrBot 原生插件配置页。旧版 `character.*` 和 `expression.*` 字段仍可读取，并在加载时迁移到结构化区域，便于逐步调整。
 

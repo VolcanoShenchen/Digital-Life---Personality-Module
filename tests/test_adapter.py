@@ -199,7 +199,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(event.stopped)
         self.assertTrue(event.call_llm)
         self.assertEqual(len(event.sent), 1)
-        self.assertIn("人格模块 0.4.0", event.sent[0])
+        self.assertIn(f"人格模块 {self.entry.VERSION}", event.sent[0])
         for private_text in ("测试角色", event.unified_msg_origin, "20001"):
             self.assertNotIn(private_text, event.sent[0])
         self.assertEqual(plugin.personality_status.permission, "ADMIN")

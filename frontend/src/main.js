@@ -124,7 +124,20 @@ function mergeDeep(target, source) {
   return target;
 }
 
+const PERSONA_SECTIONS = [
+  "identity_control", "profile", "background", "personality", "behavior",
+  "relationship", "speech", "response", "roleplay", "boundaries", "examples",
+];
+
+const MODULES = {
+  persona: { title: "人格模块", description: "维护角色身份、背景、性格和表达方式。日程与即时状态在各自模块中管理。" },
+  schedule: { title: "日程模块", description: "管理角色作息、今日安排与当前时段。独立开关，不与人格子页混排。" },
+  state: { title: "当前状态", description: "管理有来源和有效期的活动、位置、情绪与精力；有效人工状态优先于日程。" },
+  general: { title: "通用设置", description: "管理插件总开关、允许的私聊会话和机器人。这里的作用域适用于所有模块。" },
+};
+
 const labels = {
+  identity_control: "身份控制", examples: "对话示例",
   profile: "基础资料", dynamic_state: "当前状态", schedule: "今日日程", background: "经历与世界", personality: "性格核心", behavior: "情境行为",
   relationship: "专属关系", speech: "说话方式", response: "回复策略", roleplay: "动作与场景",
   boundaries: "边界保护",
@@ -400,7 +413,25 @@ function renderField(config, group, field) {
 function useAppState() {
   const config = reactive(blankConfig());
   const summary = reactive({ version: "—", valid: false, enabled: false, authority_mode: "overlay", config_error: "" });
+  const activeModule = ref("persona");
   const active = ref("profile");
+  const lastPersonaSection = ref("profile");
+  const visibleSections = computed(() => activeModule.value === "persona" ? PERSONA_SECTIONS : []);
+  function selectModule(module) {
+    if (!Object.hasOwn(MODULES, module)) return;
+    if (activeModule.value === "persona" && PERSONA_SECTIONS.includes(active.value)) {
+      lastPersonaSection.value = active.value;
+    }
+    activeModule.value = module;
+    active.value = module === "persona" ? lastPersonaSection.value
+      : module === "schedule" ? "schedule"
+      : module === "state" ? "dynamic_state" : "general";
+  }
+  function selectSection(section) {
+    if (activeModule.value !== "persona" || !PERSONA_SECTIONS.includes(section)) return;
+    active.value = section;
+    lastPersonaSection.value = section;
+  }
   const busy = ref(false);
   const loaded = ref(false);
   const scheduleLoaded = ref(false);
@@ -641,7 +672,8 @@ function useAppState() {
   onUnmounted(() => { clearInterval(clockTimer); });
 
   return {
-    config, summary, active, busy, message, messageKind, sections,
+    config, summary, active, activeModule, visibleSections, selectModule, selectSection,
+    busy, message, messageKind, sections,
     sessionsText, botsText, relationFilled, save,
     dynamicStatus, browserTimezone, setValidity, scheduleToday, scheduleCurrent, scheduleBusy, generateSchedule,
     loaded, scheduleLoaded, scheduleDraft, scheduleDirty, scheduleStatus,
@@ -706,189 +738,169 @@ function renderSchedule(state) {
   ]);
 }
 
+function renderIdentityControl(config) {
+  return h("section", { class: "panel detail", "data-section": "identity_control" }, [
+    h("div", { class: "panel-title" }, [h("div", [
+      h("h2", "身份控制"),
+      h("p", "选择角色资料来源与身份优先方式。总开关和会话白名单请前往通用设置。"),
+    ])]),
+    h("div", { class: "field-grid" }, [
+      h("label", { class: "field", for: "persona-source" }, [
+        h("span", "人格来源"),
+        h("select", { id: "persona-source", value: config.persona_source,
+          onChange: (event) => { config.persona_source = event.target.value; } }, [
+          h("option", { value: "plugin" }, "插件管理完整人格"),
+          h("option", { value: "astrbot" }, "沿用 AstrBot 人格"),
+        ]),
+        h("small", "沿用 AstrBot 人格时，本插件只补充表达规则。"),
+      ]),
+      h("label", { class: "field", for: "authority-mode" }, [
+        h("span", "身份控制模式"),
+        h("select", { id: "authority-mode", value: config.persona_authority.mode,
+          disabled: config.persona_source !== "plugin",
+          onChange: (event) => { config.persona_authority.mode = event.target.value; } }, [
+          h("option", { value: "overlay" }, "叠加模式（兼容）"),
+          h("option", { value: "character_owner" }, "角色主控模式（推荐）"),
+        ]),
+        h("small", "角色主控模式要求人格来源为插件；后台会校验不兼容的组合。"),
+      ]),
+      h("label", { class: "check-row", for: "persona-suppress-assistant" }, [
+        h("input", { id: "persona-suppress-assistant", type: "checkbox",
+          checked: config.persona_authority.suppress_generic_assistant_identity,
+          disabled: config.persona_source !== "plugin",
+          onChange: (event) => { config.persona_authority.suppress_generic_assistant_identity = event.target.checked; } }),
+        h("span", "抑制通用助手自我介绍"),
+        h("small", "主控模式下避免无缘无故自称 AI 或 AstrBot 助手。"),
+      ]),
+      h("label", { class: "check-row", for: "persona-technical-disclosure" }, [
+        h("input", { id: "persona-technical-disclosure", type: "checkbox",
+          checked: config.persona_authority.allow_technical_identity_disclosure,
+          disabled: config.persona_source !== "plugin",
+          onChange: (event) => { config.persona_authority.allow_technical_identity_disclosure = event.target.checked; } }),
+        h("span", "允许明确技术问题披露运行环境"),
+        h("small", "用户明确询问平台或模型时如实说明，不改变日常角色身份。"),
+      ]),
+    ]),
+  ]);
+}
+
+function renderGeneral(state) {
+  const { config, sessionsText, botsText } = state;
+  return h("section", { class: "panel detail general-settings", "data-section": "general" }, [
+    h("div", { class: "panel-title" }, [h("div", [
+      h("h2", "通用设置"), h("p", "总开关与生效范围。留空白名单不会对任何会话生效。"),
+    ])]),
+    h("div", { class: "field-grid" }, [
+      h("label", { class: "check-row field-wide", for: "plugin-enabled" }, [
+        h("input", { id: "plugin-enabled", type: "checkbox", checked: config.enabled,
+          onChange: (event) => { config.enabled = event.target.checked; } }),
+        h("span", "启用插件（总开关）"),
+        h("small", "总开关决定人格与动态上下文是否生效，各模块开关仍独立保存。"),
+      ]),
+      h("label", { class: "field wide", for: "allowed-sessions" }, [
+        h("span", "允许的私聊会话 UMO"),
+        h("textarea", { id: "allowed-sessions", rows: 3, value: sessionsText.value,
+          placeholder: "每行一个完整 UMO", onInput: (event) => { sessionsText.value = event.target.value; } }),
+        h("small", "可通过 AstrBot 的 /sid 获取完整值。"),
+      ]),
+      h("label", { class: "field wide", for: "allowed-bots" }, [
+        h("span", "允许的机器人 QQ 号"),
+        h("textarea", { id: "allowed-bots", rows: 3, value: botsText.value,
+          placeholder: "每行一个机器人自身 QQ 号", onInput: (event) => { botsText.value = event.target.value; } }),
+        h("small", "需要同时匹配会话 UMO 与机器人自身账号，避免跨会话和跨账号串用。"),
+      ]),
+    ]),
+  ]);
+}
+
+function renderModuleDetail(state) {
+  const { config, active, busy, dynamicStatus, browserTimezone, setValidity, relationFilled } = state;
+  const section = active.value;
+  if (section === "general") return renderGeneral(state);
+  if (section === "identity_control") return renderIdentityControl(config);
+  if (section === "examples") return h("section", { class: "panel detail", "data-section": section }, [
+    h("div", { class: "panel-title" }, [h("div", [h("h2", "对话示例"),
+      h("p", "示例只学习节奏和措辞，不会成为真实记忆或工具执行结果。")])]),
+    h("textarea", { id: "persona-examples", class: "examples", rows: 18, value: config.examples || "",
+      placeholder: "情境：普通闲聊\n用户：我刚回家。\n角色：路上顺利吗？",
+      onInput: (event) => { config.examples = event.target.value; } }),
+  ]);
+  const fields = fieldGroups[section] || [];
+  return h("section", { class: "panel detail", "data-section": section }, [
+    h("div", { class: "panel-title" }, [
+      h("div", [h("h2", labels[section] || "模块配置"), h("p", descriptions[section] || "")]),
+      h("span", { class: "count" }, `${fields.length} 个字段`),
+    ]),
+    section === "schedule" ? renderSchedule(state) : null,
+    section === "dynamic_state" ? h("div", { class: "dynamic-state-overview" }, [
+      h("div", { class: `dynamic-state-status ${dynamicStatus.value.active ? "is-active" : ""}`,
+        role: "status", "aria-live": "polite" }, [
+        h("small", "已保存状态 · 实时有效期"),
+        h("strong", { id: "dynamic-state-status" }, dynamicStatus.value.title),
+        h("p", dynamicStatus.value.detail),
+      ]),
+      h("p", { class: "timezone-note" }, `时间输入使用浏览器时区：${browserTimezone}；保存为带时区的 ISO 时间。`),
+      h("div", { class: "validity-actions" }, [h("span", "从现在开始："),
+        ...[30, 60, 120].map((minutes) => h("button", { key: minutes, type: "button",
+          "data-validity-minutes": minutes, disabled: busy.value,
+          onClick: () => setValidity(minutes) }, `${minutes} 分钟`)),
+      ]),
+      h("p", { class: "timezone-note" }, "快捷设置只更新草稿；保存后生效，不自动启用或续期。"),
+    ]) : null,
+    h("div", { class: "field-grid" }, fields.map((field) => renderField(config, section, field))),
+    section === "dynamic_state" ? h("div", { class: "tip" }, "状态必须绑定允许的会话和机器人。来源由你人工确认；过期只停止注入，不代表活动完成。") : null,
+    section === "relationship" && !relationFilled.value ? h("div", { class: "tip" }, "关系字段留空时不预设亲密关系。") : null,
+  ]);
+}
+
 function renderApp(state) {
   const {
-    config, summary, active, busy, message, messageKind, sections,
-    sessionsText, botsText, relationFilled, save,
-    dynamicStatus, browserTimezone, setValidity, scheduleToday, scheduleCurrent, scheduleBusy, generateSchedule,
-    loaded, scheduleLoaded, scheduleDraft, scheduleDirty, scheduleStatus,
-    canGenerate, canEditSchedule, loadSchedule, editSlot, addSlot, deleteSlot, saveToday,
+    config, summary, active, activeModule, visibleSections, selectModule, selectSection,
+    busy, message, messageKind, sections, save, loaded, scheduleBusy,
   } = state;
+  const module = MODULES[activeModule.value];
+  const subheading = activeModule.value === "persona" ? labels[active.value] : "";
+  const moduleStatus = !loaded.value ? "等待读取配置"
+    : activeModule.value === "schedule" ? `日程开关（草稿）：${config.schedule.enabled ? "开启" : "关闭"}`
+    : activeModule.value === "state" ? `当前状态开关（草稿）：${config.dynamic_state.enabled ? "开启" : "关闭"}`
+    : activeModule.value === "general" ? `总开关（草稿）：${config.enabled ? "开启" : "关闭"}`
+    : `已保存身份控制：${summary.authority_mode === "character_owner" ? "角色主控" : "叠加"}`;
   return h("div", { class: "app-shell" }, [
+    h("nav", { class: "module-nav", "aria-label": "一级模块导航" },
+      Object.entries(MODULES).map(([key, item]) => h("button", {
+        key, type: "button", "data-module": key,
+        class: activeModule.value === key ? "active" : "",
+        "aria-pressed": activeModule.value === key,
+        onClick: () => selectModule(key),
+      }, item.title))),
     h("header", { class: "hero" }, [
-      h("div", [
-        h("p", { class: "eyebrow" }, "DIGITAL LIFE · PERSONALITY"),
-        h("h1", "人格与表达配置"),
-        h("p", { class: "lead" }, "把“她是谁”和“她怎么回应”分开填写。每个字段只承担一个作用，保存后立即用于新的模型请求。"),
+      h("div", [h("p", { class: "eyebrow" }, "DIGITAL LIFE · MODULES"),
+        h("h1", "数字生命 · 模块配置"),
+        h("p", { class: "module-breadcrumb", "data-testid": "module-breadcrumb" },
+          `${module.title}${subheading ? ` > ${subheading}` : ""}`),
+        h("p", { class: "lead" }, module.description),
       ]),
       h("div", { class: `summary ${summary.valid ? "valid" : ""}` }, [
-        h("b", summary.enabled ? "已启用" : "未启用"),
-        h("span", `配置：${summary.valid ? "有效" : "未完成"}`),
-        h("span", `身份控制：${summary.authority_mode === "character_owner" ? "角色主控" : "叠加"}`),
-        h("span", `版本：${summary.version}`),
+        h("b", summary.enabled ? "插件已启用" : "插件未启用"),
+        h("span", `已保存配置：${summary.valid ? "有效" : "未完成"}`),
+        h("span", moduleStatus), h("span", `版本：${summary.version}`),
         summary.config_error ? h("small", summary.config_error) : null,
       ]),
     ]),
-    message.value ? h("div", { class: `flash ${messageKind.value}` }, message.value) : null,
-    h("div", { class: "scope-card" }, [
-      h("div", [
-        h("b", "生效范围"),
-        h("small", "需要同时匹配完整私聊 UMO 和机器人自身 QQ 号。留空不会对任何会话生效。"),
-      ]),
-      h("label", { class: "switch" }, [
-        h("input", {
-          type: "checkbox",
-          checked: config.enabled,
-          onChange: (event) => { config.enabled = event.target.checked; },
-        }),
-        h("span", "启用"),
-      ]),
+    message.value ? h("div", { class: `flash ${messageKind.value}`, role: "status" }, message.value) : null,
+    h("div", { class: `workspace ${activeModule.value === "persona" ? "has-subnav" : "module-single"}` }, [
+      activeModule.value === "persona" ? h("nav", { class: "tabs", "aria-label": "人格模块二级目录" },
+        visibleSections.value.map((key) => h("button", {
+          key, type: "button", "data-section": key,
+          class: active.value === key ? "active" : "",
+          "aria-current": active.value === key ? "page" : undefined,
+          onClick: () => selectSection(key),
+        }, labels[key]))) : null,
+      h("main", { class: "content", "data-active-module": activeModule.value }, [renderModuleDetail(state)]),
     ]),
-    h("div", { class: "state-legend" }, [
-      h("div", { class: "legend-item stable" }, [
-        h("b", "稳定设定"),
-        h("span", "身份、经历、性格、说话方式和边界；不会因一轮聊天自动改变。"),
-      ]),
-      h("div", { class: "legend-item dynamic" }, [
-        h("b", "临时状态"),
-        h("span", "当前活动、位置、情绪和精力；绑定会话并按有效期注入。"),
-      ]),
-    ]),
-    h("section", { class: "panel basics" }, [
-      h("div", { class: "panel-title" }, [
-        h("div", [
-          h("h2", "基础作用域"),
-          h("p", "先填写范围，再配置角色。不会自动猜测用户或机器人身份。"),
-        ]),
-        h("div", { class: "mode-selects" }, [
-          h("select", {
-            value: config.persona_source,
-            onChange: (event) => { config.persona_source = event.target.value; },
-          }, [
-            h("option", { value: "plugin" }, "插件管理完整人格"),
-            h("option", { value: "astrbot" }, "沿用 AstrBot 人格"),
-          ]),
-          h("select", {
-            value: config.persona_authority.mode,
-            disabled: config.persona_source !== "plugin",
-            onChange: (event) => { config.persona_authority.mode = event.target.value; },
-          }, [
-            h("option", { value: "overlay" }, "叠加模式（兼容）"),
-            h("option", { value: "character_owner" }, "角色主控模式（推荐）"),
-          ]),
-        ]),
-      ]),
-      h("div", { class: "basic-grid" }, [
-        h("label", { class: "field wide" }, [
-          h("span", "允许的私聊会话 UMO"),
-          h("textarea", {
-            rows: 3,
-            value: sessionsText.value,
-            placeholder: "每行一个完整 UMO",
-            onInput: (event) => { sessionsText.value = event.target.value; },
-          }),
-          h("small", "可通过 AstrBot 的 /sid 获取。"),
-        ]),
-        h("label", { class: "field wide" }, [
-          h("span", "允许的机器人 QQ 号"),
-          h("textarea", {
-            rows: 3,
-            value: botsText.value,
-            placeholder: "每行一个机器人自身 QQ 号",
-            onInput: (event) => { botsText.value = event.target.value; },
-          }),
-          h("small", "用于隔离同一适配器中的多个机器人。"),
-        ]),
-        h("label", { class: "check-row" }, [
-          h("input", {
-            type: "checkbox",
-            checked: config.persona_authority.suppress_generic_assistant_identity,
-            disabled: config.persona_source !== "plugin",
-            onChange: (event) => { config.persona_authority.suppress_generic_assistant_identity = event.target.checked; },
-          }),
-          h("span", "抑制通用助手自我介绍"),
-          h("small", "角色主控模式下，避免无缘无故自称 AI、聊天机器人或 AstrBot 助手。"),
-        ]),
-        h("label", { class: "check-row" }, [
-          h("input", {
-            type: "checkbox",
-            checked: config.persona_authority.allow_technical_identity_disclosure,
-            disabled: config.persona_source !== "plugin",
-            onChange: (event) => { config.persona_authority.allow_technical_identity_disclosure = event.target.checked; },
-          }),
-          h("span", "允许明确技术问题披露运行环境"),
-          h("small", "用户明确询问平台、模型或插件时，可以如实说明。"),
-        ]),
-      ]),
-    ]),
-    h("div", { class: "workspace" }, [
-      h("nav", { class: "tabs" }, [
-        ...sections.map((key) =>
-          h("button", {
-            class: `${active.value === key ? "active" : ""} ${key === "dynamic_state" ? "dynamic-tab" : ""}`,
-            onClick: () => { active.value = key; },
-          }, labels[key])),
-        h("button", {
-          class: active.value === "examples" ? "active" : "",
-          onClick: () => { active.value = "examples"; },
-        }, "对话示例"),
-      ]),
-      h("main", { class: "content" }, [
-        active.value === "examples"
-          ? h("section", { class: "panel detail" }, [
-              h("div", { class: "panel-title" }, [
-                h("div", [
-                  h("h2", "对话示例"),
-                  h("p", "示例只学习节奏和措辞，不会成为真实记忆或工具执行结果。"),
-                ]),
-              ]),
-              h("textarea", {
-                class: "examples",
-                rows: 18,
-                value: config.examples || "",
-                placeholder: "情境：普通闲聊\n用户：我刚回家。\n角色：路上顺利吗？",
-                onInput: (event) => { config.examples = event.target.value; },
-              }),
-            ])
-          : h("section", { class: "panel detail" }, [
-              h("div", { class: "panel-title" }, [
-                h("div", [
-                  h("h2", labels[active.value]),
-                  h("p", descriptions[active.value]),
-                ]),
-                h("span", { class: "count" }, `${fieldGroups[active.value].length} 个字段`),
-              ]),
-              active.value === "schedule" ? renderSchedule(state) : null,
-              active.value === "dynamic_state" ? h("div", { class: "dynamic-state-overview" }, [
-                h("div", {
-                  class: `dynamic-state-status ${dynamicStatus.value.active ? "is-active" : ""}`,
-                  role: "status", "aria-live": "polite",
-                }, [
-                  h("small", "已保存状态 · 实时有效期"),
-                  h("strong", { id: "dynamic-state-status" }, dynamicStatus.value.title),
-                  h("p", dynamicStatus.value.detail),
-                ]),
-                h("p", { class: "timezone-note" }, `时间输入使用浏览器时区：${browserTimezone}；保存为带时区的 ISO 时间，服务端按实际时刻校验。`),
-                h("div", { class: "validity-actions" }, [
-                  h("span", "从现在开始："),
-                  ...[30, 60, 120].map((minutes) => h("button", {
-                    type: "button", "data-validity-minutes": minutes,
-                    disabled: busy.value, onClick: () => setValidity(minutes),
-                  }, `${minutes} 分钟`)),
-                ]),
-                h("p", { class: "timezone-note" }, "快捷设置会同时更新生效与失效时间，保存后生效；页面读取、刷新和倒计时不会自动续期。"),
-              ]) : null,
-              h("div", { class: "field-grid" }, fieldGroups[active.value].map((field) => renderField(config, active.value, field))),
-              active.value === "dynamic_state" ? h("div", { class: "tip" }, "当前状态必须绑定允许的私聊会话和机器人。来源“已确认事件”需要你人工确认，不自动判断；过期只停止注入，不代表活动完成。") : null,
-              active.value === "relationship" && !relationFilled.value
-                ? h("div", { class: "tip" }, "关系字段全部留空时，不会预设任何亲密关系。")
-                : null,
-            ]),
-      ]),
-    ]),
-    h("footer", [
-      h("span", "结构化配置兼容旧版 character / expression 字段。"),
-      h("button", { class: "save", disabled: !loaded.value || busy.value || scheduleBusy.value, onClick: save }, busy.value ? "保存中…" : !loaded.value ? "等待读取配置" : "保存配置"),
+    h("footer", [h("span", "统一保存所有模块配置；切换模块保留草稿。今日时间段请使用日程内的专用保存按钮。"),
+      h("button", { class: "save", type: "button", disabled: !loaded.value || busy.value || scheduleBusy.value,
+        onClick: save }, busy.value ? "保存中…" : !loaded.value ? "等待读取配置" : "保存全部配置"),
     ]),
   ]);
 }
