@@ -50,10 +50,66 @@ class ScheduleTests(unittest.TestCase):
         self.assertEqual(plan["date"], DAY.isoformat())
         self.assertEqual(plan["slots"][0]["start"], "00:00")
         self.assertEqual(plan["slots"][-1]["end"], "24:00")
-        current = self.store.current_slot(config, NOON, owner=OWNER)
+        current = self.store.current_slot(config, NOON.replace(hour=10), owner=OWNER)
         self.assertEqual(current["location"], "LIBRARY")
-        self.assertIn("工作", current["activity"])
+        self.assertIn(OWNER["occupation"], current["activity"])
         self.assertTrue(self.store.path.is_file())
+
+    def test_generated_content_separates_meals_work_and_personal_time(self):
+        plan = self.store.generate(self.config(), DAY, owner=OWNER)
+        activities = [slot["activity"] for slot in plan["slots"]]
+        for phrase in ("起床", "早餐", "午餐", "晚餐", "睡前", OWNER["occupation"]):
+            self.assertTrue(any(phrase in activity for activity in activities), phrase)
+        self.assertGreaterEqual(len(plan["slots"]), 9)
+        self.assertIn("午餐", self.store.current_slot(self.config(), NOON, owner=OWNER)["activity"])
+        self.assertNotEqual(
+            self.store.current_slot(self.config(), NOON.replace(hour=10), owner=OWNER)["activity"],
+            self.store.current_slot(self.config(), NOON.replace(hour=15), owner=OWNER)["activity"],
+        )
+        self.assertTrue(all(slot["activity"] and slot["location"] for slot in plan["slots"]))
+
+    def test_detail_adapts_to_limits_without_gaps_or_dropped_anchors(self):
+        for maximum in (5, 6, 8, 12, 32):
+            config = self.config(max_segments=maximum)
+            plan = self.store.generate(config, DAY, owner=OWNER)
+            slots = plan["slots"]
+            self.assertLessEqual(len(slots), maximum)
+            self.assertEqual(slots[0]["start"], "00:00")
+            self.assertEqual(slots[-1]["end"], "24:00")
+            for left, right in zip(slots, slots[1:], strict=False):
+                self.assertEqual(left["end"], right["start"])
+        config = self.config(
+            max_segments=8, template_lines=["12:00-13:00 | FIXED_LUNCH | FIXED_PLACE"]
+        )
+        self.store.generate(config, DAY, owner=OWNER)
+        self.assertEqual(
+            self.store.current_slot(config, NOON, owner=OWNER)["activity"], "FIXED_LUNCH"
+        )
+
+    def test_compressed_routine_has_no_zero_length_segments(self):
+        config = self.config(
+            wake_time="08:55", work_start="09:00", work_end="09:10", sleep_time="09:15"
+        )
+        plan = self.store.generate(config, DAY, owner=OWNER)
+        self.assertEqual(len(plan["slots"]), 5)
+        schedule.validate_slots(plan["slots"])
+
+    def test_generator_upgrade_refreshes_only_automatic_data(self):
+        from unittest.mock import patch
+
+        config = self.config()
+        with patch.object(schedule, "GENERATOR_VERSION", -1):
+            old = self.store.generate(config, DAY, owner=OWNER)
+        refreshed = self.store.get_or_generate(config, NOON, owner=OWNER)
+        self.assertNotEqual(old["revision"], refreshed["revision"])
+        manual = self.store.update_slots(
+            config,
+            [{"start": "00:00", "end": "24:00", "activity": "KEEP_MANUAL"}],
+            DAY,
+            owner=OWNER,
+        )
+        with patch.object(schedule, "GENERATOR_VERSION", 100):
+            self.assertEqual(self.store.get_or_generate(config, NOON, owner=OWNER), manual)
 
     def test_workplace_defaults_use_character_occupation(self):
         plan = self.store.generate(self.config(), DAY, owner=OWNER)

@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 SCHEDULE_START = "<dlp_schedule_context_v1>\n"
 SCHEDULE_END = "\n</dlp_schedule_context_v1>"
 DEFAULT_RULE = "根据角色职业、常住地和作息生成；模板为可选固定安排。"
+GENERATOR_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -217,7 +218,7 @@ def signature(config: ScheduleConfig, owner: dict | None = None) -> str:
     rules = asdict(config)
     for control in ("enabled", "auto_generate", "allow_manual_override"):
         rules.pop(control)
-    payload = {"owner": owner or {}, "rules": rules}
+    payload = {"owner": owner or {}, "rules": rules, "generator_version": GENERATOR_VERSION}
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()
@@ -227,6 +228,40 @@ def owner_signature(owner: dict | None = None) -> str:
     return hashlib.sha256(
         json.dumps(owner or {}, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()
+
+
+def _overlay_anchors(base: list[tuple], anchors: list[dict]) -> list[dict]:
+    """Keep every minute and fixed appointment while forming timeline entries."""
+    boundaries = {point for row in base for point in row[:2]}
+    for slot in anchors:
+        boundaries.update((minutes(slot["start"]), minutes(slot["end"], end=True)))
+    result = []
+    points = sorted(boundaries)
+    for left, right in zip(points, points[1:], strict=False):
+        chosen = next(
+            (s for s in anchors if minutes(s["start"]) <= left < minutes(s["end"], end=True)), None
+        )
+        if chosen:
+            item = {**chosen, "start": clock(left), "end": clock(right), "source": "template"}
+        else:
+            _, _, activity, location = next(row for row in base if row[0] <= left < row[1])
+            item = asdict(
+                ScheduleSlot(
+                    clock(left),
+                    clock(right),
+                    activity,
+                    location,
+                    "根据角色与作息自动安排",
+                    "persona",
+                )
+            )
+        if result and all(
+            result[-1][key] == item[key] for key in ("activity", "location", "notes", "source")
+        ):
+            result[-1]["end"] = item["end"]
+        else:
+            result.append(item)
+    return result
 
 
 def generate_slots(config: ScheduleConfig, today: date, owner: dict | None = None) -> list[dict]:
@@ -253,36 +288,87 @@ def generate_slots(config: ScheduleConfig, today: date, owner: dict | None = Non
         (end, sleep, "晚餐与个人时间", home),
         (sleep, 1440, "睡眠与休息", home),
     ]
-    # Optional fixed anchors cut the generated routine, never overlap it.
-    boundaries = {0, 1440, wake, sleep, start, end}
-    for slot in anchors:
-        boundaries.update((minutes(slot["start"]), minutes(slot["end"], end=True)))
-    result = []
-    points = sorted(boundaries)
-    for left, right in zip(points, points[1:], strict=False):
-        chosen = next(
-            (s for s in anchors if minutes(s["start"]) <= left < minutes(s["end"], end=True)), None
+    # Insert useful daily activities, instead of one work block and one
+    # evening block. Short awake windows still retain a valid continuous plan.
+    proposals = []
+    if end - start >= 150:
+        lunch = max(start + 30, min(12 * 60, end - 90))
+        first = (
+            f"处理{owner['occupation']}相关事务"
+            if working and owner.get("occupation")
+            else "处理上午事务"
+            if working
+            else "处理个人事务"
         )
-        if chosen:
-            item = {**chosen, "start": clock(left), "end": clock(right), "source": "template"}
-        else:
-            _, _, activity, location = next(row for row in base if row[0] <= left < row[1])
-            item = asdict(
-                ScheduleSlot(
-                    clock(left),
-                    clock(right),
-                    activity,
-                    location,
-                    "角色生活安排，非现实执行记录",
-                    "persona",
+        second = (
+            f"继续{owner['occupation']}相关工作与收尾"
+            if working and owner.get("occupation")
+            else "处理下午事务与收尾"
+            if working
+            else "个人兴趣与休闲"
+        )
+        proposals.append(
+            (
+                start,
+                end,
+                [
+                    (start, lunch, first, workplace if working else home),
+                    (lunch, lunch + 60, "午餐与休息", workplace if working else home),
+                    (lunch + 60, end, second, workplace if working else home),
+                ],
+            )
+        )
+    if sleep - end >= 90:
+        dinner_end = end + min(60, (sleep - end) // 3)
+        proposals.append(
+            (
+                end,
+                sleep,
+                [
+                    (end, dinner_end, "晚餐与休息", home),
+                    (dinner_end, sleep, "个人时间与放松", home),
+                ],
+            )
+        )
+        if sleep - dinner_end >= 60:
+            proposals.append(
+                (
+                    dinner_end,
+                    sleep,
+                    [
+                        (dinner_end, sleep - 30, "个人时间与放松", home),
+                        (sleep - 30, sleep, "洗漱与睡前准备", home),
+                    ],
                 )
             )
-        if result and all(
-            result[-1][key] == item[key] for key in ("activity", "location", "notes", "source")
-        ):
-            result[-1]["end"] = item["end"]
-        else:
-            result.append(item)
+    if start - wake >= 45:
+        ready = wake + min(30, (start - wake) // 2)
+        proposals.append(
+            (
+                wake,
+                start,
+                [
+                    (wake, ready, "起床与洗漱", home),
+                    (ready, start, "早餐与出发准备" if working else "早餐与晨间休息", home),
+                ],
+            )
+        )
+    # No slot is truncated to meet the configured maximum. Lower limits choose
+    # a coarser routine; fixed template anchors are always kept in full.
+    result = _overlay_anchors(base, anchors)
+    for left, right, replacements in proposals:
+        candidate = []
+        found = False
+        for row in base:
+            if row[0] == left and row[1] == right:
+                candidate.extend(replacements)
+                found = True
+            else:
+                candidate.append(row)
+        if found:
+            proposed = _overlay_anchors(candidate, anchors)
+            if len(proposed) <= config.max_segments:
+                base, result = candidate, proposed
     return validate_slots(result, config.max_segments)
 
 
@@ -330,6 +416,7 @@ class ScheduleStore:
             "timezone": config.timezone,
             "generated_at": datetime.now(UTC).isoformat(),
             "generation_mode": config.generation_mode,
+            "generator_version": GENERATOR_VERSION,
             "generation_rule": config.generation_rule,
             "owner_signature": owner_signature(owner),
             "rules_signature": signature(config, owner),
